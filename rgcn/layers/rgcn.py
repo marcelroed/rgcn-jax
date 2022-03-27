@@ -65,7 +65,7 @@ class RGCNConv(eqx.Module):
         elif decomposition_method == 'block':
             raise NotImplementedError
 
-    def __call__(self, x, edge_type_idcs):
+    def __call__(self, x, edge_type_idcs, edge_masks):
         # x: [num_nodes, in_channels]
         if x is None:
             # x is an identity matrix: [num_nodes, num_nodes] = [in_channels, in_channels]
@@ -85,6 +85,7 @@ class RGCNConv(eqx.Module):
             # edge_index[0] is the source node index
             # edge_mask = edge_type == rel
             # rel_edge_index = edge_index[:, edge_type_idcs == rel]
+            edge_mask = edge_masks[rel].reshape((-1, 1))
             rel_edge_index = edge_type_idcs[rel]
 
             if x is None:
@@ -94,8 +95,8 @@ class RGCNConv(eqx.Module):
                 out_rel = jnp.matmul(x, self.relation_weights[rel])
 
             # Scatter the out_rel to the target nodes
-            out_term = jnp.zeros(prev_out.shape).at[rel_edge_index[1], :].add(out_rel[rel_edge_index[0], :], )
-            n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(1)
+            out_term = jnp.zeros(prev_out.shape).at[rel_edge_index[1], :].add(jnp.where(edge_mask, out_rel[rel_edge_index[0], :], 0), )
+            n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(jnp.where(edge_mask, 1, 0),)
             out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
             out = prev_out + out_term
             return out

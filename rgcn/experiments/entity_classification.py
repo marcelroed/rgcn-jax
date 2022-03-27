@@ -10,10 +10,13 @@ import numpy as np
 from tqdm import trange
 import matplotlib.pyplot as plt
 
-from rgcn.models.rgcn import RGCNClassifier
+from rgcn.models.classifier import RGCNClassifier
 import optax
 
 from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
+
+# Set jax device to CPU
+jax.config.update("jax_platform_name", "cpu")
 
 
 def make_model(dataset, seed):
@@ -98,9 +101,9 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
     # loss_fn = jax.jit(loss_fn)
     try:
         for _ in pbar:
-            loss, grads = loss_fn(model, x, edge_type_idcs, y_idx, y)
+            loss, grads = loss_fn(model, x, edge_type_idcs, dataset.edge_masks_by_type, y_idx, y)
             updates, opt_state = optimizer.update(grads, opt_state)
-            val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.val_idx, dataset.val_y)
+            val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.val_idx, dataset.val_y)
             losses.append(loss), test_losses.append(val_loss); test_accs.append(val_acc)
             model = eqx.apply_updates(model, updates)
             if val_loss < min_val_loss:
@@ -112,7 +115,7 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
         raise KeyboardInterrupt()
         pass
 
-    test_loss, test_acc = test_results(best_model, x, edge_type_idcs, dataset.test_idx, dataset.test_y)
+    test_loss, test_acc = test_results(best_model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.test_idx, dataset.test_y)
     print(test_acc)
 
     return model, losses, test_losses, test_accs, test_acc

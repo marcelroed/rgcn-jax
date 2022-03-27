@@ -32,8 +32,8 @@ class RGCNClassifier(eqx.Module):
     @eqx.filter_jit
     def __call__(self, x, edge_type_idcs, edge_masks):
         for layer in self.layers[:-1]:
-            x = jax.nn.relu(layer(x, edge_type_idcs))
-        x = self.layers[-1](x, edge_type_idcs)
+            x = jax.nn.relu(layer(x, edge_type_idcs, edge_masks))
+        x = self.layers[-1](x, edge_type_idcs, edge_masks)
         return x
 
     def l2_loss(self):
