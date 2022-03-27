@@ -24,4 +24,12 @@ class DistMult(eqx.Module):
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
         o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
-        return jnp.sum(s * r * o, dim=1)
+        return jnp.sum(s * r * o, axis=1)
+
+
+def test_distmult():
+    distmult = DistMult(n_relations=2, n_channels=2, key=random.PRNGKey(0))
+    x = jnp.array([[1, 2], [3, 4]])
+    edge_index = jnp.array([[0, 1], [0, 1]])
+    edge_type = jnp.array([0, 1])
+    distmult(x, edge_index, edge_type)
