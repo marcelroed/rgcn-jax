@@ -9,6 +9,7 @@ import jax.random as random
 import numpy as np
 from tqdm import trange
 import matplotlib.pyplot as plt
+from statistics import mean
 
 from rgcn.models.classifier import RGCNClassifier
 import optax
@@ -149,16 +150,17 @@ def run_experiment(dataset, seed):
 
 
 if __name__ == '__main__':
-    dataset = EntityClassificationWrapper.load_dataset('AM')
+    dataset = EntityClassificationWrapper.load_dataset('AIFB')
     results = []
     try:
-        for i in trange(1000, desc='Running models with different seeds'):
+        for i in trange(2, desc='Running models with different seeds'):
             result = run_experiment(dataset, seed=i)
             results.append(result)
     except KeyboardInterrupt:
         print('Training cancelled by KeyboardInterrupt')
 
-    results = {k: [list(results[i][k]) if isinstance(results[i][k], jnp.ndarray) else results[i][k] for i in range(len(results))] for k in results[0].keys()}
+    results = {k: [results[i][k].tolist() if isinstance(results[i][k], jnp.ndarray) else results[i][k] for i in range(len(results))] for k in results[0].keys()}
+    print(f"Mean: {mean(results['test_acc'])}")
 
     with open(f'{dataset.name.lower()}_results.pkl', 'wb') as f:
         pickle.dump(results, f)
