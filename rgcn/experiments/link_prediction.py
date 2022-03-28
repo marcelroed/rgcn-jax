@@ -132,7 +132,9 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    t = trange(40)
+    num_epochs = 50
+
+    t = trange(num_epochs)
     for i in t:
         edge_index, edge_type, pos_mask = get_train_epoch_data(dataset, key)
         loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)

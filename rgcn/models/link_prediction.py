@@ -25,7 +25,8 @@ class DistMultModel(eqx.Module):
         self.n_relations = n_relations
         self.n_channels = n_channels
         key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.glorot_uniform()(key1, (n_nodes, n_channels))
+        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, n_channels))
+        #self.initializations = jax.nn.initializers.glorot_uniform()(key1, (n_nodes, n_channels))
         self.decoder = DistMult(n_relations, n_channels, key2)
 
     def __call__(self, edge_index, edge_type):

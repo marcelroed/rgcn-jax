@@ -10,7 +10,8 @@ class DistMult(eqx.Module):
 
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
-        self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+        self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels))
+        #self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
         # O(n_edges * n_channels) to compute
