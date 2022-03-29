@@ -14,6 +14,12 @@ from jax import lax, jit
 import timeit
 import equinox as eqx
 from einops import rearrange
+import numpy as np
+from functools import partial
+
+from joblib import Memory
+
+memory = Memory('/tmp/joblib')
 
 jax.log_compiles(True)
 
@@ -80,6 +86,71 @@ def negative_sample(edge_index, num_nodes, num_negatives, key):
     return negative_samples  # [2, num_negatives]
 
 
+@memory.cache
+def make_dense_relation_edges(edge_index, edge_type, num_nodes):
+    # Convert arrays from jax to numpy
+
+    n_relations = edge_type.max() + 1
+    # Reshape the edge_index matrix (and edge_type) to [n_relations, num_nodes, max_num_neighbors]
+    result = []
+    max_num_neighbors = 0
+    for relation in trange(n_relations, desc='Finding neighbors'):
+        rel_edge_index = edge_index[:, edge_type == relation]
+        rel_result = []
+        for head in range(num_nodes):
+            head_mask = rel_edge_index[0] == head
+            tails_for_head = rel_edge_index[1, head_mask]
+            max_num_neighbors = max(max_num_neighbors, tails_for_head.shape[0])
+            rel_result.append(tails_for_head)
+        result.append(rel_result)
+
+    # Construct a result array
+    result_tensor = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=int)
+    mask = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=bool)
+
+    # Pad the inner arrays to shape [max_num_neighbors]
+    for relation in trange(n_relations, desc='Writing to tensor'):
+        for head in range(num_nodes):
+            head_edges = result[relation][head]
+            result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant', constant_values=-1)
+            mask[relation][head] = np.concatenate((np.ones_like(head_edges, dtype=bool), np.zeros(max_num_neighbors - head_edges.shape[0], dtype=bool)))
+
+    return result_tensor, mask
+
+
+def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
+    dense_tensor, dense_mask = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
+    dense_tensor, dense_mask = jnp.array(dense_tensor, dtype=jnp.int32), jnp.array(dense_mask, dtype=bool)
+    # dense_tensor: [n_relations, num_nodes, max_num_neighbors]
+
+    @partial(jax.vmap, in_axes=1, out_axes=0)
+    def isin(triple):
+        head, tail, edge_type = triple
+        dense_edge_index = dense_tensor[edge_type, head]
+        return jnp.isin(tail, dense_edge_index)
+
+    def perform(key):
+        # Always generate one negative sample per positive sample
+        num_edges = edge_index.shape[1]
+        rand = jrandom.randint(key, (1, num_edges), 0, num_nodes)  # [1, num_edges]
+        rand2 = jrandom.randint(key, (1, num_edges), 0, num_nodes)  # [1, num_edges]
+
+        head_or_tail = jrandom.bernoulli(key, 0.5, (1, num_edges))  # [1, num_edges]
+        head_tail_mask = jnp.concatenate([head_or_tail, ~head_or_tail], axis=0)  # [2, num_edges]
+
+        maybe_negative_samples = jnp.where(head_tail_mask, rand, edge_index)  # [2, num_edges]
+
+        maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)], axis=0)  # [3, num_edges]
+
+        positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
+        head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
+
+        definitely_negative_samples = jnp.where(head_or_tail_positive, rand2, maybe_negative_samples)  # [2, num_edges]
+        return definitely_negative_samples
+
+    return perform
+
+
 def batched_negative_sample(edge_index, edge_type, num_nodes, key):
     # Always generate one negative sample per positive sample
     num_edges = edge_index.shape[1]
@@ -100,6 +171,7 @@ def batched_negative_sample(edge_index, edge_type, num_nodes, key):
     positive_samples_mask = jnp.isin(maybe_negative_encoded_triples, encoded_real_triples).reshape(1, num_edges)  # [1, num_edges]
     head_tail_adjusted_positive_samples_mask = head_tail_mask * positive_samples_mask  # [2, num_edges]
     definitely_negative_samples = jnp.where(head_tail_adjusted_positive_samples_mask, rand2, maybe_negative_samples)  # [2, num_edges]
+
 
     return definitely_negative_samples
 
@@ -128,16 +200,20 @@ def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
     return full_edge_index, full_edge_type, pos_mask
 
 
-@jax.jit
-def get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes, key):
-    neg_edge_index = batched_negative_sample(edge_index=pos_edge_index, edge_type=pos_edge_type, num_nodes=num_nodes, key=key)
-    neg_edge_type = pos_edge_type
+def make_get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes):
+    dense_batched_negative_sample = make_dense_batched_negative_sample(edge_index=pos_edge_index, edge_type=pos_edge_type, num_nodes=num_nodes)
 
-    full_edge_index = jnp.concatenate((pos_edge_index, neg_edge_index), axis=-1)
-    full_edge_type = jnp.concatenate((pos_edge_type, neg_edge_type), axis=-1)
+    @jax.jit
+    def perform(key):
+        neg_edge_index = dense_batched_negative_sample(key=key)
+        neg_edge_type = pos_edge_type
 
-    pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
-    return full_edge_index, full_edge_type, pos_mask
+        full_edge_index = jnp.concatenate((pos_edge_index, neg_edge_index), axis=-1)
+        full_edge_type = jnp.concatenate((pos_edge_type, neg_edge_type), axis=-1)
+
+        pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
+        return full_edge_index, full_edge_type, pos_mask
+    return perform
 
 
 @eqx.filter_jit
@@ -202,9 +278,11 @@ def train():
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
+    get_train_epoch_data_fast = make_get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes)
     try:
         for i in t:
-            edge_index, edge_type, pos_mask = get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes, key)
+            use_key, key = jrandom.split(key)
+            edge_index, edge_type, pos_mask = get_train_epoch_data_fast(key=use_key)
             loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)
             updates, opt_state = optimizer.update(grads, opt_state)
             mean_test_score = model(test_edge_index, test_edge_type).mean()
