@@ -65,20 +65,15 @@ class RGCNConv(eqx.Module):
         elif decomposition_method == 'block':
             raise NotImplementedError
 
-    def __call__(self, x, edge_type_idcs, edge_masks):
-        # x: [num_nodes, in_channels]
+    def get_self_transform(self, x: Optional[jnp.ndarray] = None):
         if x is None:
             # x is an identity matrix: [num_nodes, num_nodes] = [in_channels, in_channels]
             self_transform = self.self_weight
         else:
             self_transform = jnp.matmul(x, self.self_weight)
+        return self_transform
 
-        # out: [num_nodes, out_channels]
-        out = self_transform
-
-        # self_transform: [num_nodes, out_channels]
-
-        # edge_index: [2, num_edges]
+    def get_work_relation(self, x, edge_type_idcs, edge_masks):
         @jax.jit
         def work_relation(rel, state):
             prev_out = state
@@ -100,11 +95,29 @@ class RGCNConv(eqx.Module):
             out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
             out = prev_out + out_term
             return out
+        return work_relation
+
+    def __call__(self, x, edge_type_idcs, edge_masks):
+        # x: [num_nodes, in_channels]
+
+        # out: [num_nodes, out_channels]
+        out = self.get_self_transform(x)
+
+        # self_transform: [num_nodes, out_channels]
+
+        # edge_index: [2, num_edges]
+        work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
 
         # Transform all the nodes using each relation transform
         out = jax.lax.fori_loop(0, self.n_relations, work_relation, out)
 
         return out
+
+    def single_relation(self, x, edge_type_idcs, edge_masks, rel):
+        work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
+        num_nodes = self.in_channels if x is None else x.shape[0]
+        out = jnp.zeros_like(num_nodes, self.out_channels)
+        return work_relation(rel, out)
 
     def l2_loss(self):
         return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()
