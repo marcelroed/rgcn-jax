@@ -9,7 +9,7 @@ import optax
 from tqdm import trange
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
-from rgcn.models.link_prediction import DistMultModel, compute_loss
+from rgcn.models.link_prediction import DistMultModel, compute_loss, ComplExModel
 import jax.random as jrandom
 import jax.numpy as jnp
 import equinox as eqx
@@ -92,7 +92,7 @@ def negative_sample(edge_index, num_nodes, num_negatives, key):
     return negative_samples  # [2, num_negatives]
 
 
-# @memory.cache
+@memory.cache
 def make_dense_relation_edges(edge_index, edge_type, num_nodes):
     n_relations = edge_type.max() + 1
     # Reshape the edge_index matrix (and edge_type) to [n_relations, num_nodes, max_num_neighbors]
@@ -114,6 +114,7 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
 
     # Pad the inner arrays to shape [max_num_neighbors]
     for relation in trange(n_relations, desc='Writing to tensor'):
+        gc.collect()
         for head in range(num_nodes):
             head_edges = result[relation][head]
             result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant',
@@ -250,9 +251,9 @@ class MRRResults:
         )
 
     @classmethod
-    def generate_from(cls, hrt_scores, test_edge_index):
-        head_results = mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, 'head')
-        tail_results = mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, 'tail')
+    def generate_from(cls, head_hrt_scores, tail_hrt_scores, test_edge_index):
+        head_results = mean_reciprocal_rank_and_hits(head_hrt_scores, test_edge_index, 'head')
+        tail_results = mean_reciprocal_rank_and_hits(tail_hrt_scores, test_edge_index, 'tail')
         return head_results.average_with(tail_results)
 
 
@@ -291,14 +292,14 @@ def train():
     seed = 42
     key = jrandom.PRNGKey(seed)
     dataset = LinkPredictionWrapper.load_wordnet18()
-    model = DistMultModel(dataset.num_nodes, dataset.num_relations, 100, key)
-    optimizer = optax.adam(learning_rate=5e-1)
+    model = ComplExModel(dataset.num_nodes, dataset.num_relations, 100, key)
+    optimizer = optax.experimental.split_real_and_imaginary(optax.adam(learning_rate=5e-1))
     opt_state = optimizer.init(model)
 
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 1000
+    num_epochs = 200
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
@@ -337,20 +338,17 @@ def train():
     # print(test_edge_index[1, :].max())
     # print(test_edge_index[1, :].dtype)
 
-    head_mrr = mean_reciprocal_rank_and_hits(head_corrupt_scores, test_edge_index, 'head')
-    tail_mrr = mean_reciprocal_rank_and_hits(tail_corrupt_scores, test_edge_index, 'tail')
+    unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
 
-    print('Unfiltered:', head_mrr.average_with(tail_mrr))
+    print('Unfiltered:', unfiltered_results)
 
     mask_head, mask_tail = generate_mrr_filter_mask(np.array(dataset.edge_index), np.array(dataset.edge_type), num_nodes, np.array(test_data))
-
     head_filtered_scores = head_corrupt_scores.at[mask_head].set(-jnp.inf)
     tail_filtered_scores = tail_corrupt_scores.at[mask_tail].set(-jnp.inf)
 
-    head_mrr = mean_reciprocal_rank_and_hits(head_filtered_scores, test_edge_index, 'head')
-    tail_mrr = mean_reciprocal_rank_and_hits(tail_filtered_scores, test_edge_index, 'tail')
+    filtered_results = MRRResults.generate_from(head_filtered_scores, tail_filtered_scores, test_edge_index)
 
-    print('Filtered:', head_mrr.average_with(tail_mrr))
+    print('Filtered:', filtered_results)
 
     # f = wrapper(model, dataset.num_nodes, 5000)
     # test_data = jnp.concatenate((test_edge_index.reshape((-1, 2)), test_edge_type.reshape((-1, 1))), axis=1)
