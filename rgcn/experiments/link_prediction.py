@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jax import lax, jit
 import timeit
 import equinox as eqx
+from rgcn.utils.numpy import parallel_argsort_last
 from einops import rearrange
 import numpy as np
 from functools import partial
@@ -231,12 +232,12 @@ class MRRResults:
     hits_at_1: float
 
 
-@eqx.filter_jit
 def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail']):
+    hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
     assert corrupt in ['head', 'tail']
 
     # hrt_scores: (n_test_edges, n_nodes)
-    perm = jnp.argsort(-hrt_scores, axis=1)
+    perm = parallel_argsort_last(-hrt_scores)
     # Find the location of the true edges in the sorted list
     if corrupt == 'head':
         mask = perm == test_edge_index[0, :].reshape((-1, 1))
@@ -245,20 +246,20 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
 
     # Get the index of the true edges in the sorted list
     print(mask.shape)
-    true_index = jnp.argmax(mask, axis=1) + 1
+    true_index = np.argmax(mask, axis=1) + 1
     print(true_index.shape)
     # Get the reciprocal rank of the true edges
-    rr = 1.0 / true_index.astype(jnp.float32)
+    rr = 1.0 / true_index.astype(np.float32)
 
     # Get the mean reciprocal rank
-    mrr = jnp.mean(rr)
+    mrr = np.mean(rr)
 
     # Get the hits@10 of the true edges
-    hits10 = jnp.sum(mask[:, :10], axis=1, dtype=jnp.float32).mean()
+    hits10 = np.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
     # Get the hits@3 of the true edges
-    hits3 = jnp.sum(mask[:, :3], axis=1, dtype=jnp.float32).mean()
+    hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
     # Get the hits@1 of the true edges
-    hits1 = jnp.sum(mask[:, :1], axis=1, dtype=jnp.float32).mean()
+    hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
     return mrr, hits10, hits3, hits1 #  MRRResults(mrr, hits10, hits3, hits1)
 
 
@@ -273,7 +274,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 50
+    num_epochs = 1000
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
@@ -285,8 +286,9 @@ def train():
             edge_index, edge_type, pos_mask = get_train_epoch_data_fast(key=use_key)
             loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)
             updates, opt_state = optimizer.update(grads, opt_state)
-            mean_test_score = model(test_edge_index, test_edge_type).mean()
-            t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
+            # mean_test_score = model(test_edge_index, test_edge_type).mean()
+            # t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
+            t.set_description(f'\tLoss: {loss}')
             t.refresh()
             model = eqx.apply_updates(model, updates)
     except KeyboardInterrupt:
