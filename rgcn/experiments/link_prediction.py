@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
@@ -35,7 +36,7 @@ def get_tail_corrupted(head, tail, num_nodes):
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
 
 
-def wrapper(model, num_nodes, batch_dim=50):
+def wrapper(model, num_nodes, batch_dim=50, mode: Literal['head', 'tail'] = 'head'):
     @eqx.filter_jit
     def generate_logits(test_data):
         test_data = jnp.transpose(test_data)
@@ -47,7 +48,10 @@ def wrapper(model, num_nodes, batch_dim=50):
             head = x[0]  # []
             tail = x[1]  # []
             corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
-            corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
+            if mode == 'head':
+                corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
+            else:
+                corrupted_edge_index = get_tail_corrupted(head, tail, num_nodes)  # [2, num_nodes]
             scores = model(corrupted_edge_index, corrupted_edge_type)  # [num_nodes, ]
             # return jnp.array([head, tail, x[2]])
             return scores
@@ -237,7 +241,7 @@ class MRRResults:
     hits_at_3: float
     hits_at_1: float
 
-    def average_with(self, other):
+    def average_with(self, other: MRRResults):
         return MRRResults(
             mrr=(self.mrr + other.mrr) / 2,
             hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2,
@@ -294,7 +298,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 1000
+    num_epochs = 50
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
@@ -319,7 +323,8 @@ def train():
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
     print('Starting test scores')
-    test_scores = wrapper(model, dataset.num_nodes)(test_data)
+    head_corrupt_scores = wrapper(model, dataset.num_nodes, mode='head')(test_data)
+    tail_corrupt_scores = wrapper(model, dataset.num_nodes, mode='tail')(test_data)
     print('Finished test scores')
     # print(test_data.shape)
     # print(test_scores.shape)
@@ -331,19 +336,16 @@ def train():
     # print(test_edge_index[1, :].min())
     # print(test_edge_index[1, :].max())
     # print(test_edge_index[1, :].dtype)
-    print(test_scores.shape)
-    print(jnp.choose(test_edge_index[0, :], test_scores.T).mean())
-    print(test_scores)
 
-    head_mrr = mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'head')
-    tail_mrr = mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'tail')
+    head_mrr = mean_reciprocal_rank_and_hits(head_corrupt_scores, test_edge_index, 'head')
+    tail_mrr = mean_reciprocal_rank_and_hits(tail_corrupt_scores, test_edge_index, 'tail')
 
     print('Unfiltered:', head_mrr.average_with(tail_mrr))
 
     mask_head, mask_tail = generate_mrr_filter_mask(np.array(dataset.edge_index), np.array(dataset.edge_type), num_nodes, np.array(test_data))
 
-    head_filtered_scores = test_scores.at[mask_head].set(-jnp.inf)
-    tail_filtered_scores = test_scores.at[mask_tail].set(-jnp.inf)
+    head_filtered_scores = head_corrupt_scores.at[mask_head].set(-jnp.inf)
+    tail_filtered_scores = tail_corrupt_scores.at[mask_tail].set(-jnp.inf)
 
     head_mrr = mean_reciprocal_rank_and_hits(head_filtered_scores, test_edge_index, 'head')
     tail_mrr = mean_reciprocal_rank_and_hits(tail_filtered_scores, test_edge_index, 'tail')

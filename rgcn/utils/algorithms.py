@@ -72,3 +72,12 @@ def test_generate_mrr2():
 
     print(head_mask)
     print(tail_mask)
+
+
+def test_parallel_argsort():
+    print()
+    arr = np.random.rand(5000, 40_000)
+    argsort_arr = parallel_argsort_last(arr)
+    standard_argsort_arr = np.argsort(arr, axis=1)
+
+    assert np.all(argsort_arr == standard_argsort_arr)
