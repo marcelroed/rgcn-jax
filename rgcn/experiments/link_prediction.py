@@ -3,18 +3,15 @@ from typing import Literal
 
 import jax
 import optax
-from jax import jit
 from tqdm import trange
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import DistMultModel, compute_loss
 import jax.random as jrandom
 import jax.numpy as jnp
-from jax import lax, jit
-import timeit
 import equinox as eqx
-from rgcn.utils.numpy import parallel_argsort_last
-from einops import rearrange
+from rgcn.utils.algorithms import parallel_argsort_last, generate_mrr_filter_mask
+
 import numpy as np
 from functools import partial
 
@@ -38,19 +35,21 @@ def get_tail_corrupted(head, tail, num_nodes):
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
 
 
-def wrapper(model, num_nodes, num_relations, batch_dim=50):
+def wrapper(model, num_nodes, batch_dim=50):
     @eqx.filter_jit
     def generate_logits(test_data):
+        test_data = jnp.transpose(test_data)
+
         # test_data: [n_test_edges, 3]
         @jax.vmap  # [n_test_edges, 3] -> [n_test_edges, n_nodes]
         def loop(x):  # [3,] -> [n_nodes,]
             # x: [3, ]
-            head = x[0] # []
-            tail = x[1] # []
+            head = x[0]  # []
+            tail = x[1]  # []
             corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
-            corrupted_edge_index = get_head_corrupted(head, tail, num_nodes) # [2, num_nodes]
+            corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
             scores = model(corrupted_edge_index, corrupted_edge_type)  # [num_nodes, ]
-            #return jnp.array([head, tail, x[2]])
+            # return jnp.array([head, tail, x[2]])
             return scores
 
         # Batch the test data
@@ -113,8 +112,10 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
     for relation in trange(n_relations, desc='Writing to tensor'):
         for head in range(num_nodes):
             head_edges = result[relation][head]
-            result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant', constant_values=-1)
-            mask[relation][head] = np.concatenate((np.ones_like(head_edges, dtype=bool), np.zeros(max_num_neighbors - head_edges.shape[0], dtype=bool)))
+            result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant',
+                                                   constant_values=-1)
+            mask[relation][head] = np.concatenate(
+                (np.ones_like(head_edges, dtype=bool), np.zeros(max_num_neighbors - head_edges.shape[0], dtype=bool)))
 
     return result_tensor, mask
 
@@ -122,6 +123,7 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
 def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
     dense_tensor, dense_mask = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
     dense_tensor, dense_mask = jnp.array(dense_tensor, dtype=jnp.int32), jnp.array(dense_mask, dtype=bool)
+
     # dense_tensor: [n_relations, num_nodes, max_num_neighbors]
 
     @partial(jax.vmap, in_axes=1, out_axes=0)
@@ -141,7 +143,8 @@ def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
 
         maybe_negative_samples = jnp.where(head_tail_mask, rand, edge_index)  # [2, num_edges]
 
-        maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)], axis=0)  # [3, num_edges]
+        maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
+                                                 axis=0)  # [3, num_edges]
 
         positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
         head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
@@ -166,16 +169,17 @@ def batched_negative_sample(edge_index, edge_type, num_nodes, key):
     real_triples = jnp.concatenate([edge_index, edge_type.reshape(1, -1)], axis=0)  # [3, num_edges]
     encoded_real_triples = encode_with_type(real_triples, num_nodes, edge_type)  # [num_edges, ]
 
-    maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)], axis=0)  # [3, num_edges]
+    maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
+                                             axis=0)  # [3, num_edges]
     maybe_negative_encoded_triples = encode_with_type(maybe_negative_triples, num_nodes, edge_type)  # [num_edges, ]
 
-    positive_samples_mask = jnp.isin(maybe_negative_encoded_triples, encoded_real_triples).reshape(1, num_edges)  # [1, num_edges]
+    positive_samples_mask = jnp.isin(maybe_negative_encoded_triples, encoded_real_triples).reshape(1,
+                                                                                                   num_edges)  # [1, num_edges]
     head_tail_adjusted_positive_samples_mask = head_tail_mask * positive_samples_mask  # [2, num_edges]
-    definitely_negative_samples = jnp.where(head_tail_adjusted_positive_samples_mask, rand2, maybe_negative_samples)  # [2, num_edges]
-
+    definitely_negative_samples = jnp.where(head_tail_adjusted_positive_samples_mask, rand2,
+                                            maybe_negative_samples)  # [2, num_edges]
 
     return definitely_negative_samples
-
 
 
 def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
@@ -202,7 +206,8 @@ def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
 
 
 def make_get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes):
-    dense_batched_negative_sample = make_dense_batched_negative_sample(edge_index=pos_edge_index, edge_type=pos_edge_type, num_nodes=num_nodes)
+    dense_batched_negative_sample = make_dense_batched_negative_sample(edge_index=pos_edge_index,
+                                                                       edge_type=pos_edge_type, num_nodes=num_nodes)
 
     @jax.jit
     def perform(key):
@@ -214,6 +219,7 @@ def make_get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes):
 
         pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
         return full_edge_index, full_edge_type, pos_mask
+
     return perform
 
 
@@ -231,8 +237,22 @@ class MRRResults:
     hits_at_3: float
     hits_at_1: float
 
+    def average_with(self, other):
+        return MRRResults(
+            mrr=(self.mrr + other.mrr) / 2,
+            hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2,
+            hits_at_3=(self.hits_at_3 + other.hits_at_3) / 2,
+            hits_at_1=(self.hits_at_1 + other.hits_at_1) / 2
+        )
 
-def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail']):
+    @classmethod
+    def generate_from(cls, hrt_scores, test_edge_index):
+        head_results = mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, 'head')
+        tail_results = mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, 'tail')
+        return head_results.average_with(tail_results)
+
+
+def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail']) -> MRRResults:
     hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
     assert corrupt in ['head', 'tail']
 
@@ -260,7 +280,7 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
     hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
     # Get the hits@1 of the true edges
     hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
-    return mrr, hits10, hits3, hits1 #  MRRResults(mrr, hits10, hits3, hits1)
+    return MRRResults(mrr, hits10, hits3, hits1)
 
 
 def train():
@@ -296,22 +316,39 @@ def train():
 
     # key1, key2 = jrandom.split(jrandom.PRNGKey(seed))
 
-    test_data = jnp.concatenate((test_edge_index.T, test_edge_type.reshape((-1, 1))), axis=1)  # [3, n_test_edges]
-    test_scores = wrapper(model, dataset.num_nodes, dataset.test_idx.sum())(test_data)
-    #print(test_data.shape)
-    #print(test_scores.shape)
-    #print(test_scores)
-    #print(test_edge_index)
-    #print(test_edge_type)
-    #print(test_edge_index[1, :].shape)
-    #print(test_scores.shape)
-    #print(test_edge_index[1, :].min())
-    #print(test_edge_index[1, :].max())
-    #print(test_edge_index[1, :].dtype)
+    test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
+                                 test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
+    print('Starting test scores')
+    test_scores = wrapper(model, dataset.num_nodes)(test_data)
+    print('Finished test scores')
+    # print(test_data.shape)
+    # print(test_scores.shape)
+    # print(test_scores)
+    # print(test_edge_index)
+    # print(test_edge_type)
+    # print(test_edge_index[1, :].shape)
+    # print(test_scores.shape)
+    # print(test_edge_index[1, :].min())
+    # print(test_edge_index[1, :].max())
+    # print(test_edge_index[1, :].dtype)
     print(test_scores.shape)
     print(jnp.choose(test_edge_index[0, :], test_scores.T).mean())
     print(test_scores)
-    print(mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'head'))
+
+    head_mrr = mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'head')
+    tail_mrr = mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'tail')
+
+    print('Unfiltered:', head_mrr.average_with(tail_mrr))
+
+    mask_head, mask_tail = generate_mrr_filter_mask(np.array(dataset.edge_index), np.array(dataset.edge_type), num_nodes, np.array(test_data))
+
+    head_filtered_scores = test_scores.at[mask_head].set(-jnp.inf)
+    tail_filtered_scores = test_scores.at[mask_tail].set(-jnp.inf)
+
+    head_mrr = mean_reciprocal_rank_and_hits(head_filtered_scores, test_edge_index, 'head')
+    tail_mrr = mean_reciprocal_rank_and_hits(tail_filtered_scores, test_edge_index, 'tail')
+
+    print('Filtered:', head_mrr.average_with(tail_mrr))
 
     # f = wrapper(model, dataset.num_nodes, 5000)
     # test_data = jnp.concatenate((test_edge_index.reshape((-1, 2)), test_edge_type.reshape((-1, 1))), axis=1)
