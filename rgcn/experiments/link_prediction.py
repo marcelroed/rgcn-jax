@@ -92,8 +92,6 @@ def negative_sample(edge_index, num_nodes, num_negatives, key):
 
 @memory.cache
 def make_dense_relation_edges(edge_index, edge_type, num_nodes):
-    # Convert arrays from jax to numpy
-
     n_relations = edge_type.max() + 1
     # Reshape the edge_index matrix (and edge_type) to [n_relations, num_nodes, max_num_neighbors]
     result = []
@@ -242,6 +240,8 @@ class MRRResults:
     hits_at_1: float
 
     def average_with(self, other: MRRResults):
+        print('Averaging', self)
+        print('with', other)
         return MRRResults(
             mrr=(self.mrr + other.mrr) / 2,
             hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2,
@@ -298,7 +298,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 50
+    num_epochs = 1000
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
