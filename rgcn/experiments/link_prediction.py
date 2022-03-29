@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import gc
 from dataclasses import dataclass
 from typing import Literal
 
@@ -90,13 +92,14 @@ def negative_sample(edge_index, num_nodes, num_negatives, key):
     return negative_samples  # [2, num_negatives]
 
 
-@memory.cache
+# @memory.cache
 def make_dense_relation_edges(edge_index, edge_type, num_nodes):
     n_relations = edge_type.max() + 1
     # Reshape the edge_index matrix (and edge_type) to [n_relations, num_nodes, max_num_neighbors]
     result = []
     max_num_neighbors = 0
     for relation in trange(n_relations, desc='Finding neighbors'):
+        gc.collect()
         rel_edge_index = edge_index[:, edge_type == relation]
         rel_result = []
         for head in range(num_nodes):
@@ -108,7 +111,6 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
 
     # Construct a result array
     result_tensor = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=int)
-    mask = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=bool)
 
     # Pad the inner arrays to shape [max_num_neighbors]
     for relation in trange(n_relations, desc='Writing to tensor'):
@@ -116,15 +118,13 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
             head_edges = result[relation][head]
             result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant',
                                                    constant_values=-1)
-            mask[relation][head] = np.concatenate(
-                (np.ones_like(head_edges, dtype=bool), np.zeros(max_num_neighbors - head_edges.shape[0], dtype=bool)))
-
-    return result_tensor, mask
+    return result_tensor
 
 
 def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
-    dense_tensor, dense_mask = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
-    dense_tensor, dense_mask = jnp.array(dense_tensor, dtype=jnp.int32), jnp.array(dense_mask, dtype=bool)
+    dense_tensor = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
+    dense_tensor = jnp.array(dense_tensor, dtype=jnp.int32)
+    gc.collect()
 
     # dense_tensor: [n_relations, num_nodes, max_num_neighbors]
 
