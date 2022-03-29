@@ -39,8 +39,11 @@ class EntityClassificationWrapper:
         val_idx, test_idx = jnp.split(test_idx_original, [len(test_idx_original) // 5])
         val_y, test_y = jnp.split(test_y_original, [len(test_y_original) // 5])
 
+        # padded: [n_relations, 2, max_edge_index_length]
         padded = [np.pad(edge_index[:, i == edge_type], ((0, 0), (0, max_edge_index_length - (i == edge_type).sum()))) for i in range(dataset.num_relations)]
         mask_lengths = [np.sum(edge_type == i) for i in range(dataset.num_relations)]
+
+        # masks: [n_relations, max_edge_index_length]
         masks = [np.concatenate((np.ones(ml, dtype=bool), np.zeros(max_edge_index_length - ml, dtype=bool)), axis=0) for ml in mask_lengths]
         np_masks = np.stack(masks, axis=0)
         np_padded = np.stack(padded, axis=0)

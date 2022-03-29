@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
+import jax
 import optax
 from jax import jit
 from tqdm import trange
@@ -12,6 +13,9 @@ import jax.numpy as jnp
 from jax import lax, jit
 import timeit
 import equinox as eqx
+from einops import rearrange
+
+jax.log_compiles(True)
 
 
 def get_head_corrupted(head, tail, num_nodes):
@@ -24,33 +28,50 @@ def get_tail_corrupted(head, tail, num_nodes):
     return jnp.stack((jnp.ones(num_nodes, dtype=jnp.int32) * head, range_n))
 
 
-def wrapper(model, num_nodes, num_relations):
+# WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
+
+
+def wrapper(model, num_nodes, num_relations, batch_dim=50):
+    @eqx.filter_jit
     def generate_logits(test_data):
-        def loop(x):
-            head = x[0]
-            tail = x[1]
-            corrupted_edge_type = x[2].repeat(num_nodes)
-            corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)
-            scores = model(corrupted_edge_index, corrupted_edge_type)
+        # test_data: [n_test_edges, 3]
+        @jax.vmap  # [n_test_edges, 3] -> [n_test_edges, n_nodes]
+        def loop(x):  # [3,] -> [n_nodes,]
+            # x: [3, ]
+            head = x[0] # []
+            tail = x[1] # []
+            corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
+            corrupted_edge_index = get_head_corrupted(head, tail, num_nodes) # [2, num_nodes]
+            scores = model(corrupted_edge_index, corrupted_edge_type)  # [num_nodes, ]
             #return jnp.array([head, tail, x[2]])
             return scores
 
-        return lax.map(loop, test_data)
+        # Batch the test data
+        # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)
+        batched_test_data = test_data.reshape((-1, batch_dim, 3))  # [batch_size, n_test_edges, 3]
+
+        return jax.lax.map(loop, batched_test_data).reshape((-1, num_nodes))
 
     return generate_logits
 
 
 def encode(edge_index, num_nodes):
-    row, col = edge_index
+    row, col = edge_index[0], edge_index[1]
     return row * num_nodes + col
 
 
 def negative_sample(edge_index, num_nodes, num_negatives, key):
+    # Generate random edges
     rand = jrandom.randint(key, (2, num_negatives), 0, num_nodes)
-    real_coding = encode(edge_index, num_nodes)
-    rand_coding = encode(rand, num_nodes)
-    mask = jnp.isin(rand_coding, real_coding)
-    return rand[:, ~mask]
+
+    real_coding = encode(edge_index, num_nodes)  # [num_edges, ]
+    rand_coding = encode(rand, num_nodes)  # [num_edges, ]
+
+    positive_samples_mask = jnp.isin(rand_coding, real_coding)
+
+    negative_samples = jnp.where(positive_samples_mask, jrandom.randint(key, (2, num_negatives), 0, num_nodes), rand)
+
+    return negative_samples
 
 
 def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
@@ -59,7 +80,7 @@ def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
 
     pos_edge_type = dataset.edge_type[dataset.train_idx]
     pos_edge_index = dataset.edge_index[:, dataset.train_idx]
-    pos_count = dataset.train_idx.sum()
+    # pos_count = dataset.train_idx.sum()
 
     for i in range(0, dataset.num_relations):
         iter_key, key = jrandom.split(key)
@@ -91,6 +112,7 @@ class MRRResults:
     hits_at_1: float
 
 
+@eqx.filter_jit
 def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail']):
     assert corrupt in ['head', 'tail']
 
@@ -110,15 +132,15 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
     rr = 1.0 / true_index.astype(jnp.float32)
 
     # Get the mean reciprocal rank
-    mrr = jnp.mean(rr).item()
+    mrr = jnp.mean(rr)
 
     # Get the hits@10 of the true edges
-    hits10 = jnp.sum(mask[:, :10], axis=1, dtype=jnp.float32).mean().item()
+    hits10 = jnp.sum(mask[:, :10], axis=1, dtype=jnp.float32).mean()
     # Get the hits@3 of the true edges
-    hits3 = jnp.sum(mask[:, :3], axis=1, dtype=jnp.float32).mean().item()
+    hits3 = jnp.sum(mask[:, :3], axis=1, dtype=jnp.float32).mean()
     # Get the hits@1 of the true edges
-    hits1 = jnp.sum(mask[:, :1], axis=1, dtype=jnp.float32).mean().item()
-    return MRRResults(mrr, hits10, hits3, hits1)
+    hits1 = jnp.sum(mask[:, :1], axis=1, dtype=jnp.float32).mean()
+    return mrr, hits10, hits3, hits1 #  MRRResults(mrr, hits10, hits3, hits1)
 
 
 def train():
@@ -135,18 +157,21 @@ def train():
     num_epochs = 50
 
     t = trange(num_epochs)
-    for i in t:
-        edge_index, edge_type, pos_mask = get_train_epoch_data(dataset, key)
-        loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        mean_test_score = model(test_edge_index, test_edge_type).mean()
-        t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
-        t.refresh()
-        model = eqx.apply_updates(model, updates)
+    try:
+        for i in t:
+            edge_index, edge_type, pos_mask = get_train_epoch_data(dataset, key)
+            loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)
+            updates, opt_state = optimizer.update(grads, opt_state)
+            mean_test_score = model(test_edge_index, test_edge_type).mean()
+            t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
+            t.refresh()
+            model = eqx.apply_updates(model, updates)
+    except KeyboardInterrupt:
+        print(f'Interrupted training at epoch {i}')
 
     # key1, key2 = jrandom.split(jrandom.PRNGKey(seed))
 
-    test_data = jnp.concatenate((test_edge_index.T, test_edge_type.reshape((-1, 1))), axis=1)
+    test_data = jnp.concatenate((test_edge_index.T, test_edge_type.reshape((-1, 1))), axis=1)  # [3, n_test_edges]
     test_scores = wrapper(model, dataset.num_nodes, dataset.test_idx.sum())(test_data)
     #print(test_data.shape)
     #print(test_scores.shape)
@@ -158,6 +183,7 @@ def train():
     #print(test_edge_index[1, :].min())
     #print(test_edge_index[1, :].max())
     #print(test_edge_index[1, :].dtype)
+    print(test_scores.shape)
     print(jnp.choose(test_edge_index[0, :], test_scores.T).mean())
     print(test_scores)
     print(mean_reciprocal_rank_and_hits(test_scores, test_edge_index, 'head'))
