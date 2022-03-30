@@ -100,7 +100,7 @@ def train():
     dense_relation, dense_mask = make_dense_relation_tensor(num_relations=dataset.num_relations, edge_index=dataset.edge_index, edge_type=dataset.edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
 
-    model = RGCNModel([16], dataset.num_nodes, dataset.num_relations, key)
+    model = RGCNModel([100], dataset.num_nodes, dataset.num_relations, key)
     optimizer = optax.adam(learning_rate=1e-2)
     opt_state = optimizer.init(model)
 
