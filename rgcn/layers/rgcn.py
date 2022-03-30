@@ -113,10 +113,21 @@ class RGCNConv(eqx.Module):
 
         return out
 
-    def single_relation(self, x, edge_type_idcs, edge_masks, rel):
-        work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
+    def single_relation(self, x, edge_idx, edge_mask, rel):
         out = self.get_self_transform(x)
-        return work_relation(rel, out)
+
+        if x is None:
+            # x is the identity matrix
+            out_rel = self.relation_weights[rel]
+        else:
+            out_rel = jnp.matmul(x, self.relation_weights[rel])
+
+        out_term = jnp.zeros(out.shape).at[edge_idx[1], :].add(out_rel[edge_idx[0], :])
+        n_input_edges = jnp.zeros((out.shape[0], 1)).at[edge_idx[1]].add(1)
+        out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
+        out = out + out_term
+
+        return out
 
     def l2_loss(self):
         return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()

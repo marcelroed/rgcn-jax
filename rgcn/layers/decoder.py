@@ -2,7 +2,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as random
-jnp.einsum
 
 
 class DistMult(eqx.Module):
@@ -29,13 +28,19 @@ class DistMult(eqx.Module):
         return jnp.sum(s * r * o, axis=1)
 
     def call_dense(self, x, rel_edge_index, rel_edge_mask):
+        n_relations, _, max_edges_per_relation = rel_edge_index.shape
         # rel_edge_index: [n_relations, 2, max_edges_per_relation]
 
-        s = jnp.where(rel_edge_mask, x[rel_edge_index[0, :]], 0)
-        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+        expanded_edge_mask = rel_edge_mask.reshape(n_relations, max_edges_per_relation, 1)  # [n_relations, max_edges_per_relation, 1]
 
-        o = jnp.where(rel_edge_mask, x[rel_edge_index[1, :]], 0)
-        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
+        s = jnp.where(expanded_edge_mask, x[rel_edge_index[:, 0, :]], 0)  # [n_relations, max_edges_per_relation, n_channels]
+        s = jnp.where(expanded_edge_mask, s / jnp.linalg.norm(s, axis=2, keepdims=True), 0)  # [n_relations, max_edges_per_relation, n_channels]
+
+        o = jnp.where(expanded_edge_mask, x[rel_edge_index[:, 1, :]], 0)
+        o = jnp.where(expanded_edge_mask, o / jnp.linalg.norm(o, axis=2, keepdims=True), 0)
+
+        result = jnp.einsum('rec, rc, rec -> re', s, self.weights, o)
+        return result
 
 
 class ComplEx(eqx.Module):

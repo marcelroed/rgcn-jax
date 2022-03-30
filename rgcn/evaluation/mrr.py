@@ -150,12 +150,12 @@ def make_generate_logits(model, num_nodes, batch_dim=50, mode: Literal['head', '
             # x: [3, ]
             head = x[0]  # []
             tail = x[1]  # []
-            corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
+            # corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
             if mode == 'head':
                 corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
             else:
                 corrupted_edge_index = get_tail_corrupted(head, tail, num_nodes)  # [2, num_nodes]
-            scores = model(corrupted_edge_index, corrupted_edge_type)  # [num_nodes, ]
+            scores = model.single_relation(corrupted_edge_index, x[2])  # [num_nodes, ]
             # return jnp.array([head, tail, x[2]])
             return scores
 

@@ -26,6 +26,8 @@ class BasicModelData:
     edge_index: jnp.ndarray
     edge_type: jnp.ndarray
 
+    is_dense = False
+
     @classmethod
     def from_data(cls, edge_index, edge_type, **kwargs):
         warn(f'Not using additional parameters: {", ".join(kwargs.keys())} in {cls.__name__}')
@@ -54,6 +56,10 @@ class DistMultModel(eqx.Module):
     def __call__(self, edge_index, edge_type):
         return self.decoder(self.initializations, edge_index, edge_type)
 
+    def single_relation(self, edge_index, rel):
+        return self.decoder(self.initializations, edge_index, rel)
+
+
 
 
 class ComplExModel(eqx.Module):
@@ -70,23 +76,23 @@ class ComplExModel(eqx.Module):
 
 
 @pytree_dataclass
-class RGCNModelData:
+class RGCNModelTrainingData:
     """Has extensions for the RGCN model"""
-    edge_index: jnp.ndarray
-    edge_type: jnp.ndarray
     edge_type_idcs: jnp.ndarray
     edge_masks: jnp.ndarray
 
+    is_dense = True
+
     @classmethod
-    def from_data(cls, edge_index, edge_type, edge_type_idcs, edge_masks):
+    def from_data(cls, edge_type_idcs, edge_masks):
         # edge_type_idcs, edge_masks = make_dense_relation_edges(edge_index, edge_type, n_relations)
-        return cls(edge_index, edge_type, edge_type_idcs, edge_masks)
+        return cls(edge_type_idcs, edge_masks)
 
 
 class RGCNModel(eqx.Module):
     rgcns: list[RGCNConv]
     decoder: DistMult
-    data_class = RGCNModelData
+    data_class = RGCNModelTrainingData
 
     @dataclass
     class Config(BaseConfig):
@@ -104,12 +110,20 @@ class RGCNModel(eqx.Module):
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
-    def __call__(self, data: RGCNModelData):
+    def __call__(self, data: RGCNModelTrainingData):
         x = None
         for layer in self.rgcns:
             x = layer(x, data.edge_type_idcs, data.edge_masks)
-        x = self.decoder(x, data.edge_index, data.edge_type)
+        x = self.decoder.call_dense(x, data.edge_type_idcs, data.edge_masks)
 
+        return x
+
+    def single_relation(self, edge_index, rel):
+        x = None
+        edge_mask = jnp.ones((edge_index.shape[0], 1), dtype=jnp.bool_)
+        for layer in self.rgcns:
+            x = layer.single_relation(x, edge_index, edge_mask, rel)
+        x = self.decoder(x, edge_index, edge_type=rel)
         return x
 
 
@@ -119,7 +133,7 @@ def test_rgcn_model():
     n_channels = 5
     key = jrandom.PRNGKey(0)
 
-    data = RGCNModelData.from_data(
+    data = RGCNModelTrainingData.from_data(
         jnp.array([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]]),
         jnp.array([0, 2, 3, 1, 4, 1, 1, 1, 1, 1]),
         n_relations

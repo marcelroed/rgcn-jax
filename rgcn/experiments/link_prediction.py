@@ -5,12 +5,13 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import optax
+from einops import rearrange
 from tqdm import trange
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
-from rgcn.data.sampling import make_dense_batched_negative_sample
+from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_batched_negative_sample_dense_rel
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
-from rgcn.models.link_prediction import compute_loss, RGCNModel, RGCNModelData
+from rgcn.models.link_prediction import compute_loss, RGCNModel, RGCNModelTrainingData, BasicModelData
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 jax.config.update('jax_log_compiles', True)
@@ -33,40 +34,43 @@ def make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_node
         full_edge_type = jnp.concatenate((pos_edge_type, neg_edge_type), axis=-1)
 
         pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
-        return full_edge_index, full_edge_type, pos_mask
+
+        return BasicModelData(full_edge_index, full_edge_type), pos_mask
+
+        # return full_edge_index, full_edge_type, pos_mask
 
     return perform
 
 
 def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
     # Generate the dense representation of the positive edges once to determine the shape
-    _, dense_mask = make_dense_relation_tensor(num_relations=pos_edge_type.max() + 1, edge_index=pos_edge_index, edge_type=pos_edge_type)
-    dense_relation_shape = dense_mask.shape
+    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=pos_edge_type.max() + 1, edge_index=pos_edge_index, edge_type=pos_edge_type)
+    dense_relation_shape = dense_relation.shape
 
-    dense_batched_negative_sample = make_dense_batched_negative_sample(edge_index=pos_edge_index,
+    dense_batched_negative_sample = make_dense_batched_negative_sample_dense_rel(edge_index=pos_edge_index,
                                                                        edge_type=pos_edge_type, num_nodes=num_nodes,
-                                                                       num_edges=dense_relation_shape[0] * dense_relation_shape[2])
+                                                                       )
 
     dense_mask = jnp.array(dense_mask, dtype=jnp.bool_)
+    dense_relation = jnp.array(dense_relation)
     doubled_dense_mask = jnp.repeat(dense_mask, repeats=2, axis=-1)
 
     @jax.jit
     def perform(key):
-        neg_edge_index = dense_batched_negative_sample(key=key).reshape(dense_relation_shape)
+        neg_dense_edge_index = dense_batched_negative_sample(key=key)
 
-        full_edge_index = jnp.concatenate((pos_edge_index, neg_edge_index), axis=-1)
+        full_dense_edge_index = jnp.concatenate((dense_relation, neg_dense_edge_index), axis=-1)
 
-        pos_mask = jnp.concatenate((jnp.ones_like(dense_mask), jnp.zeros(dense_mask)), axis=2)
-        data = RGCNModelData()
-        return full_edge_index, pos_mask, doubled_dense_mask
+        pos_mask = jnp.concatenate((jnp.ones_like(dense_mask), jnp.zeros_like(dense_mask)), axis=1)
+        return RGCNModelTrainingData(edge_type_idcs=full_dense_edge_index, edge_masks=doubled_dense_mask,), pos_mask
 
     return perform
 
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
-def loss_fn(model, edge_index, edge_type, mask):
-    scores = model(edge_index, edge_type)
+def loss_fn(model, data, mask):
+    scores = model(data)
     return compute_loss(scores, mask)
 
 
@@ -95,16 +99,19 @@ def train():
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
-    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
     i = None
-    train_data = model.data_class.from_data(edge_index=)
+
+    if model.data_class.is_dense:
+        get_train_epoch_data_fast = make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes)
+    else:
+        get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
     try:
         for i in t:
             use_key, key = jrandom.split(key)
-            edge_index, edge_type, pos_mask = get_train_epoch_data_fast(key=use_key)
-            loss, grads = loss_fn(model, edge_index, edge_type, pos_mask)
+            train_data, pos_mask = get_train_epoch_data_fast(key=use_key)
+            loss, grads = loss_fn(model, train_data, pos_mask)
             updates, opt_state = optimizer.update(grads, opt_state)
             # mean_test_score = model(test_edge_index, test_edge_type).mean()
             # t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
