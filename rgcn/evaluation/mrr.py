@@ -119,9 +119,9 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
     return MRRResults(mrr, hits10, hits3, hits1)
 
 
-def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index):
-    head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, mode='head')(test_data)
-    tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, mode='tail')(test_data)
+def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
+    head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='head')(test_data)
+    tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='tail')(test_data)
     unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
@@ -139,7 +139,9 @@ def filter_scores(scores, mask):
     return scores.at[mask].set(-jnp.inf)
 
 
-def make_generate_logits(model, num_nodes, batch_dim=50, mode: Literal['head', 'tail'] = 'head'):
+def make_generate_logits(model, num_nodes, all_data, batch_dim=50, mode: Literal['head', 'tail'] = 'head'):
+    node_embeddings = model.get_node_embeddings(all_data)
+
     @eqx.filter_jit
     def generate_logits(test_data):
         test_data = jnp.transpose(test_data)
@@ -150,12 +152,13 @@ def make_generate_logits(model, num_nodes, batch_dim=50, mode: Literal['head', '
             # x: [3, ]
             head = x[0]  # []
             tail = x[1]  # []
-            # corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
+            #corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
             if mode == 'head':
                 corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
             else:
                 corrupted_edge_index = get_tail_corrupted(head, tail, num_nodes)  # [2, num_nodes]
-            scores = model.single_relation(corrupted_edge_index, x[2])  # [num_nodes, ]
+            scores = model.call_special(corrupted_edge_index, x[2], node_embeddings)  # [num_nodes, ]
+            #scores = model.single_relation(corrupted_edge_index, x[2])  # [num_nodes, ]
             # return jnp.array([head, tail, x[2]])
             return scores
 

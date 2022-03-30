@@ -80,6 +80,8 @@ class RGCNConv(eqx.Module):
             # edge_index[0] is the source node index
             # edge_mask = edge_type == rel
             # rel_edge_index = edge_index[:, edge_type_idcs == rel]
+            print(edge_masks)
+            print(rel)
             edge_mask = edge_masks[rel].reshape((-1, 1))
             rel_edge_index = edge_type_idcs[rel]
 
@@ -113,21 +115,21 @@ class RGCNConv(eqx.Module):
 
         return out
 
-    def single_relation(self, x, edge_idx, edge_mask, rel):
-        out = self.get_self_transform(x)
-
-        if x is None:
-            # x is the identity matrix
-            out_rel = self.relation_weights[rel]
-        else:
-            out_rel = jnp.matmul(x, self.relation_weights[rel])
-
-        out_term = jnp.zeros(out.shape).at[edge_idx[1], :].add(out_rel[edge_idx[0], :])
-        n_input_edges = jnp.zeros((out.shape[0], 1)).at[edge_idx[1]].add(1)
-        out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
-        out = out + out_term
-
-        return out
+    # def single_relation(self, x, edge_idx, rel):
+    #     out = self.get_self_transform(x)
+    #
+    #     if x is None:
+    #         # x is the identity matrix
+    #         out_rel = self.relation_weights[rel]
+    #     else:
+    #         out_rel = jnp.matmul(x, self.relation_weights[rel])
+    #
+    #     out_term = jnp.zeros(out.shape).at[edge_idx[1], :].add(out_rel[edge_idx[0], :])
+    #     n_input_edges = jnp.zeros((out.shape[0], 1)).at[edge_idx[1]].add(1)
+    #     out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
+    #     out = out + out_term
+    #
+    #     return out
 
     def l2_loss(self):
         return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()

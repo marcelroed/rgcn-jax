@@ -34,34 +34,6 @@ class BasicModelData:
         return cls(edge_index=edge_index, edge_type=edge_type)
 
 
-class DistMultModel(eqx.Module):
-    decoder: DistMult
-    initializations: jnp.ndarray
-    data_class = BasicModelData
-
-    @dataclass
-    class Config(BaseConfig):
-        n_channels: int
-        name: Optional[str] = None
-
-        def get_model(self, n_nodes, n_relations, key):
-            return RGCNModel(self, n_nodes, n_relations, key)
-
-    def __init__(self, config: Config, n_nodes, n_relations, key):
-        super().__init__()
-        key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
-        self.decoder = DistMult(n_relations, config.n_channels, key2)
-
-    def __call__(self, edge_index, edge_type):
-        return self.decoder(self.initializations, edge_index, edge_type)
-
-    def single_relation(self, edge_index, rel):
-        return self.decoder(self.initializations, edge_index, rel)
-
-
-
-
 class ComplExModel(eqx.Module):
     decoder: ComplEx
     initializations: jnp.ndarray
@@ -89,10 +61,28 @@ class RGCNModelTrainingData:
         return cls(edge_type_idcs, edge_masks)
 
 
+class DistMultModel(eqx.Module):
+    decoder: DistMult
+    initializations: jnp.ndarray
+
+    @dataclass
+    class Config(BaseConfig):
+        n_channels: int
+        name: Optional[str] = None
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__()
+        key1, key2 = jrandom.split(key, 2)
+        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
+        self.decoder = DistMult(n_relations, config.n_channels, key2)
+
+    def __call__(self, edge_index, rel):
+        return self.decoder(self.initializations, edge_index, rel)
+
+
 class RGCNModel(eqx.Module):
     rgcns: list[RGCNConv]
     decoder: DistMult
-    data_class = RGCNModelTrainingData
 
     @dataclass
     class Config(BaseConfig):
@@ -102,29 +92,37 @@ class RGCNModel(eqx.Module):
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
 
-    def __init__(self, config: Config, n_nodes, n_relations, key):
+    def __init__(self, hidden_channels, n_nodes, n_relations, key):
         key1, key2 = jrandom.split(key)
         self.rgcns = [
-            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations, decomposition_method='basis', n_decomp=2, key=key1)
-            for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
+            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
+                     decomposition_method='basis', n_decomp=2, key=key1)
+            for in_channels, out_channels in zip([n_nodes] + hidden_channels[:-1], hidden_channels)
         ]
-        self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
+        self.decoder = DistMult(n_relations, hidden_channels[-1], key2)
 
-    def __call__(self, data: RGCNModelTrainingData):
+    def __call__(self, edge_index, rel, all_data):
         x = None
         for layer in self.rgcns:
-            x = layer(x, data.edge_type_idcs, data.edge_masks)
-        x = self.decoder.call_dense(x, data.edge_type_idcs, data.edge_masks)
-
+            x = layer(x, all_data.edge_type_idcs, all_data.edge_masks)
+        x = self.decoder(x, edge_index, rel)
         return x
 
-    def single_relation(self, edge_index, rel):
+    def get_node_embeddings(self, all_data):
         x = None
-        edge_mask = jnp.ones((edge_index.shape[0], 1), dtype=jnp.bool_)
         for layer in self.rgcns:
-            x = layer.single_relation(x, edge_index, edge_mask, rel)
-        x = self.decoder(x, edge_index, edge_type=rel)
+            x = layer(x, all_data.edge_type_idcs, all_data.edge_masks)
         return x
+
+    def call_special(self, edge_index, rel, node_embeddings):
+        return self.decoder(node_embeddings, edge_index, rel)
+
+    #def single_relation(self, edge_index, rel):
+    #   x = None
+    #    for layer in self.rgcns:
+    #        x = layer(x, edge_index, rel)
+    #    x = self.decoder(x, edge_index, rel)
+    #    return x
 
 
 def test_rgcn_model():
