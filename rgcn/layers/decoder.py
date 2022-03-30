@@ -124,9 +124,42 @@ def test_complex():
     result = compl(x, edge_index, edge_type)
     print(result)
     complex_weights = np.array(compl.weights_i) * 1j + np.array(compl.weights_r)
-    s, r, o = x_[edge_index[0,:], :], complex_weights[edge_type, :], x_[edge_index[1,:], :]
+    s, r, o = x_[edge_index[0, :], :], complex_weights[edge_type, :], x_[edge_index[1, :], :]
     result = np.sum(s * r * np.conj(o), axis=1).real
     print(result)
+
+
+class SimplE(eqx.Module, Decoder):
+    n_relations: int
+    weights: jnp.ndarray
+    weights_inv: jnp.ndarray
+
+    def __init__(self, n_relations, n_channels, key):
+        self.n_relations = n_relations
+        key1, key2 = random.split(key, 2)
+        self.weights = jax.nn.initializers.normal()(key1, (n_relations, n_channels))
+        self.weights_inv = jax.nn.initializers.normal()(key2, (n_relations, n_channels))
+        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+
+    def __call__(self, x, edge_index, edge_type):
+        # x: [n_nodes, 2, n_channels] -- first head vectors, then tail vectors
+        s_h, s_t = x[edge_index[0, :], 0, :], x[edge_index[0, :], 1, :]  # [n_edges, n_channels]
+        r, r_inv = self.weights[edge_type, :], self.weights_inv[edge_type, :]  # [n_edges, n_channels]
+        o_h, o_t = x[edge_index[1, :], 0, :], x[edge_index[1, :], 1, :]  # [n_edges, n_channels]
+
+        return (s_h * r * o_t + o_h * r_inv * s_t).sum(axis=1) / 2
+
+    def forward_heads(self, heads, edge_type, tail):
+        r, r_inv = self.weights[edge_type, :], self.weights_inv[edge_type, :]
+        o_h, o_t = tail[0, :], tail[1, :]
+        s_h, s_t = heads[:, 0, :], heads[:, 1, :]
+        return (s_h * (r * o_t) + (o_h * r_inv) * s_t).sum(axis=1) / 2
+
+    def forward_tails(self, head, edge_type, tails):
+        r, r_inv = self.weights[edge_type, :], self.weights_inv[edge_type, :]
+        s_h, s_t = head[0, :], head[1, :]
+        o_h, o_t = tails[:, 0, :], tails[:, 1, :]
+        return ((s_h * r) * o_t + o_h * (r_inv * s_t)).sum(axis=1) / 2
 
 
 class RESCAL(eqx.Module, Decoder):

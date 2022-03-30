@@ -3,7 +3,7 @@ import jax.random as jrandom
 import jax
 import jax.numpy as jnp
 
-from rgcn.layers.decoder import TransE, ComplEx, Decoder
+from rgcn.layers.decoder import Decoder, ComplEx, SimplE, TransE
 
 
 def cross_entropy_loss(x, y):
@@ -77,6 +77,29 @@ class ComplExModel(GenericModel):
         return self.regularization * (
                 jnp.square(self.decoder.weights_r).sum() +
                 jnp.square(self.decoder.weights_i).sum() +
+                jnp.square(self.initializations).sum()
+        )
+
+
+class SimplEModel(GenericModel):
+
+    def __init__(self, n_nodes, n_relations, n_channels, key, regularization=None):
+        key1, key2, key3 = jrandom.split(key, 3)
+        super().__init__(SimplE, n_nodes, n_relations, n_channels, key3, regularization)
+
+        # [n_nodes, 2, n_channels] -- first real, then imaginary
+        self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, n_channels)),
+                                          jax.nn.initializers.normal()(key2, (n_nodes, n_channels))], 1)
+
+    def normalize(self):
+        pass
+
+    def l2_loss(self):
+        if self.regularization is None:
+            return jnp.array(0.)
+        return self.regularization * (
+                jnp.square(self.decoder.weights).sum() +
+                jnp.square(self.decoder.weights_inv).sum() +
                 jnp.square(self.initializations).sum()
         )
 
