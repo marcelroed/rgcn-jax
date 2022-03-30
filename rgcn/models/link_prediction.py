@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Optional
+
 from jax_dataclasses import pytree_dataclass
 
 import equinox as eqx
@@ -7,7 +10,8 @@ import jax.numpy as jnp
 
 from rgcn.layers.decoder import DistMult, ComplEx
 from rgcn.layers.rgcn import RGCNConv
-from rgcn.data.utils import make_dense_relation_edges
+from rgcn.data.utils import make_dense_relation_edges, BaseConfig
+from warnings import warn
 
 
 def compute_loss(x, y):
@@ -16,18 +20,40 @@ def compute_loss(x, y):
     return loss.mean()
 
 
+@pytree_dataclass
+class BasicModelData:
+    """Only stores edge_index and edge_type"""
+    edge_index: jnp.ndarray
+    edge_type: jnp.ndarray
+
+    @classmethod
+    def from_data(cls, edge_index, edge_type, **kwargs):
+        warn(f'Not using additional parameters: {", ".join(kwargs.keys())} in {cls.__name__}')
+        return cls(edge_index=edge_index, edge_type=edge_type)
+
+
 class DistMultModel(eqx.Module):
     decoder: DistMult
     initializations: jnp.ndarray
+    data_class = BasicModelData
 
-    def __init__(self, n_nodes, n_relations, n_channels, key):
+    @dataclass
+    class Config(BaseConfig):
+        n_channels: int
+        name: Optional[str] = None
+
+        def get_model(self, n_nodes, n_relations, key):
+            return RGCNModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, n_channels))
-        self.decoder = DistMult(n_relations, n_channels, key2)
+        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
+        self.decoder = DistMult(n_relations, config.n_channels, key2)
 
     def __call__(self, edge_index, edge_type):
         return self.decoder(self.initializations, edge_index, edge_type)
+
 
 
 class ComplExModel(eqx.Module):
@@ -45,27 +71,38 @@ class ComplExModel(eqx.Module):
 
 @pytree_dataclass
 class RGCNModelData:
+    """Has extensions for the RGCN model"""
     edge_index: jnp.ndarray
     edge_type: jnp.ndarray
     edge_type_idcs: jnp.ndarray
     edge_masks: jnp.ndarray
 
     @classmethod
-    def from_data(cls, edge_index, edge_type, n_relations):
-        edge_type_idcs, edge_masks = make_dense_relation_edges(edge_index, edge_type, n_relations)
+    def from_data(cls, edge_index, edge_type, edge_type_idcs, edge_masks):
+        # edge_type_idcs, edge_masks = make_dense_relation_edges(edge_index, edge_type, n_relations)
         return cls(edge_index, edge_type, edge_type_idcs, edge_masks)
 
 
 class RGCNModel(eqx.Module):
     rgcns: list[RGCNConv]
     decoder: DistMult
+    data_class = RGCNModelData
 
-    def __init__(self, n_nodes, n_relations, hidden_channels, key):
+    @dataclass
+    class Config(BaseConfig):
+        hidden_channels: list[int]
+        name: Optional[str] = None
+
+        def get_model(self, n_nodes, n_relations, key):
+            return RGCNModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
         key1, key2 = jrandom.split(key)
         self.rgcns = [
-            RGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations, decomposition_method='basis', n_decomp=2, key=key1)
+            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations, decomposition_method='basis', n_decomp=2, key=key1)
+            for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
-        self.decoder = DistMult(n_relations, hidden_channels, key2)
+        self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, data: RGCNModelData):
         x = None

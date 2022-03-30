@@ -115,8 +115,7 @@ class RGCNConv(eqx.Module):
 
     def single_relation(self, x, edge_type_idcs, edge_masks, rel):
         work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
-        num_nodes = self.in_channels if x is None else x.shape[0]
-        out = jnp.zeros_like(num_nodes, self.out_channels)
+        out = self.get_self_transform(x)
         return work_relation(rel, out)
 
     def l2_loss(self):

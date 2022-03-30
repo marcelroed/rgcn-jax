@@ -2,6 +2,13 @@ from attrs import define
 import jax.numpy as jnp
 from torch_geometric.datasets import WordNet18
 from rgcn.data.utils import torch_to_jax
+from jax_dataclasses import pytree_dataclass
+
+
+@pytree_dataclass
+class LinkPredictionData:
+    edge_index: jnp.ndarray
+    edge_type: jnp.ndarray
 
 
 @define

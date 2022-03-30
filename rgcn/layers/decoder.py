@@ -2,6 +2,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as random
+jnp.einsum
 
 
 class DistMult(eqx.Module):
@@ -26,6 +27,15 @@ class DistMult(eqx.Module):
         o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
         return jnp.sum(s * r * o, axis=1)
+
+    def call_dense(self, x, rel_edge_index, rel_edge_mask):
+        # rel_edge_index: [n_relations, 2, max_edges_per_relation]
+
+        s = jnp.where(rel_edge_mask, x[rel_edge_index[0, :]], 0)
+        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+
+        o = jnp.where(rel_edge_mask, x[rel_edge_index[1, :]], 0)
+        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
 
 class ComplEx(eqx.Module):
