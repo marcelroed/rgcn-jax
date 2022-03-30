@@ -91,7 +91,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 50
+    num_epochs = 100
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
