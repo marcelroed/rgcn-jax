@@ -3,7 +3,7 @@ import jax.random as jrandom
 import jax
 import jax.numpy as jnp
 
-from rgcn.layers.decoder import TransE, Decoder
+from rgcn.layers.decoder import TransE, ComplEx, Decoder
 
 
 def cross_entropy_loss(x, y):
@@ -56,6 +56,51 @@ class GenericModel(eqx.Module):
         if self.regularization is None:
             return jnp.array(0.)
         return self.regularization * (jnp.square(self.decoder.weights).sum())
+
+
+class ComplExModel(eqx.Module):
+    n_nodes: int
+    n_relations: int
+    n_channels: int
+    regularization: float
+    decoder: Decoder
+    initializations: jnp.ndarray  # [n_nodes, 2, n_channels] -- first real, then imaginary
+
+    def __init__(self, n_nodes, n_relations, n_channels, key, regularization=None):
+        super().__init__()
+        self.n_nodes = n_nodes
+        self.n_relations = n_relations
+        self.n_channels = n_channels
+        self.regularization = regularization
+        key1, key2, key3 = jrandom.split(key, 3)
+        self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, n_channels)),
+                                          jax.nn.initializers.normal()(key2, (n_nodes, n_channels))], 1)
+        self.decoder = ComplEx(n_relations, n_channels, key3)
+
+    def __call__(self, edge_index, edge_type):
+        return self.decoder(self.initializations, edge_index, edge_type)
+
+    def normalize(self):
+        pass
+
+    def forward_heads(self, edge_type, tail):
+        return self.decoder.forward_heads(self.initializations, edge_type, self.initializations[tail])
+
+    def forward_tails(self, edge_type, head):
+        return self.decoder.forward_tails(self.initializations[head], edge_type, self.initializations)
+
+    def loss(self, edge_index, edge_type, mask):
+        scores = self(edge_index, edge_type)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        if self.regularization is None:
+            return jnp.array(0.)
+        return self.regularization * (
+                jnp.square(self.decoder.weights_r).sum() +
+                jnp.square(self.decoder.weights_i).sum() +
+                jnp.square(self.initializations).sum()
+        )
 
 
 class TransEModel(GenericModel):

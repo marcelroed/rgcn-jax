@@ -1,8 +1,11 @@
+import numpy as np
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as random
 from abc import ABC, abstractmethod
+
 
 class Decoder(ABC):
     @abstractmethod
@@ -19,6 +22,7 @@ class Decoder(ABC):
     def forward_tails(self, head, edge_type, tails):
         # [n_channels], [], [n_nodes, n_channels]
         pass
+
 
 class DistMult(eqx.Module, Decoder):
     n_relations: int
@@ -62,6 +66,67 @@ def test_distmult():
     edge_index = jnp.array([[0, 1], [0, 1]])
     edge_type = jnp.array([0, 1])
     distmult(x, edge_index, edge_type)
+
+
+class ComplEx(eqx.Module, Decoder):
+    n_relations: int
+    weights_r: jnp.ndarray
+    weights_i: jnp.ndarray
+
+    def __init__(self, n_relations, n_channels, key):
+        self.n_relations = n_relations
+        key1, key2 = random.split(key, 2)
+        self.weights_r = jax.nn.initializers.normal()(key1, (n_relations, n_channels))
+        self.weights_i = jax.nn.initializers.normal()(key2, (n_relations, n_channels))
+        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+
+    def __call__(self, x, edge_index, edge_type):
+        # x: [n_nodes, 2, n_channels] -- first real, then imaginary
+        s_r, s_i = x[edge_index[0, :], 0, :], x[edge_index[0, :], 1, :]  # [n_edges, n_channels]
+        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]  # [n_edges, n_channels]
+        o_r, o_i = x[edge_index[1, :], 0, :], x[edge_index[1, :], 1, :]  # [n_edges, n_channels]
+
+        return (s_r * r_r * o_r +
+                s_r * r_i * o_i +
+                s_i * r_r * o_i -
+                s_i * r_i * o_r).sum(axis=1)
+
+    def forward_heads(self, heads, edge_type, tail):
+        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]
+        o_r, o_i = tail[0, :], tail[1, :]
+        s_r, s_i = heads[:, 0, :], heads[:, 1, :]
+        return (s_r * (r_r * o_r) +
+                s_r * (r_i * o_i) +
+                s_i * (r_r * o_i) -
+                s_i * (r_i * o_r)).sum(axis=1)
+
+    def forward_tails(self, head, edge_type, tails):
+        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]
+        s_r, s_i = head[0, :], head[1, :]
+        o_r, o_i = tails[:, 0, :], tails[:, 1, :]
+        return ((s_r * r_r) * o_r +
+                (s_r * r_i) * o_i +
+                (s_i * r_r) * o_i -
+                (s_i * r_i) * o_r).sum(axis=1)
+
+
+def test_complex():
+    compl = ComplEx(n_relations=2, n_channels=2, key=random.PRNGKey(0))
+    x = jnp.array([[[1, 2],
+                    [1, -1]],
+                   [[3, 5],
+                    [2, 3]]])
+    x_ = np.array([[1 + 1j, 2 - 1j],
+                   [3 + 2j, 5 + 3j]], dtype=complex)
+    edge_index = jnp.array([[0, 1],
+                            [0, 1]])
+    edge_type = jnp.array([0, 1])
+    result = compl(x, edge_index, edge_type)
+    print(result)
+    complex_weights = np.array(compl.weights_i) * 1j + np.array(compl.weights_r)
+    s, r, o = x_[edge_index[0,:], :], complex_weights[edge_type, :], x_[edge_index[1,:], :]
+    result = np.sum(s * r * np.conj(o), axis=1).real
+    print(result)
 
 
 class RESCAL(eqx.Module, Decoder):
@@ -125,3 +190,7 @@ class TransE(eqx.Module, Decoder):
     def forward_tails(self, head, edge_type, tails):
         r = self.weights[edge_type]
         return -jnp.linalg.norm((head + r) - tails, axis=1, ord=1)
+
+
+if __name__ == '__main__':
+    test_complex()
