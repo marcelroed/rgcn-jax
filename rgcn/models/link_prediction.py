@@ -127,9 +127,9 @@ class ComplExModel(GenericShallowModel):
                          n_nodes=n_nodes, n_relations=n_relations, key=key3)
 
         # [n_nodes, 2, n_channels] -- first real, then imaginary
-        self.initializations = jax.lax.complex(
-            jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
-            jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))
+        self.initializations = jnp.stack(
+            (jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
+             jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))), axis=1
         )
 
     def normalize(self):

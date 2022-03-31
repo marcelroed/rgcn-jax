@@ -91,22 +91,31 @@ class ComplEx(eqx.Module, Decoder):
         key1, key2 = random.split(key, 2)
         init = jax.nn.initializers.normal()
         real, imag = init(key1, (n_relations, n_channels)), init(key2, (n_relations, n_channels))
-        self.weights = jax.lax.complex(real, imag).astype(jnp.complex64)
+        self.weights = jnp.stack((real, imag), axis=1)
 
     def __call__(self, x, edge_index, edge_type):
+        x = jax.lax.complex(x[:, 0], x[:, 1])
+
         s = x[edge_index[0, :], :]  # [n_edges, n_channels]
-        r = self.weights[edge_type, :]  # [n_edges, n_channels]
+        r = jax.lax.complex(self.weights[0], self.weights[1])[edge_type, :]  # [n_edges, n_channels]
         o = jnp.conjugate(x[edge_index[1, :], :])  # [n_edges, n_channels]
 
         return jnp.sum(s * r * o, axis=1).real
 
     def forward_heads(self, heads, edge_type, tail):
-        r = self.weights[edge_type]
+        heads = jax.lax.complex(heads[:, 0], heads[:, 1])
+        tail = jax.lax.complex(tail[0], tail[1])
+        weights_complex = jax.lax.complex(self.weights[0], self.weights[1])
+        r = weights_complex[edge_type, :]
         # return jnp.sum(heads * (r * tail), axis=1)
         return jnp.einsum('ec,c,c->e', heads, r, jnp.conjugate(tail)).real
 
     def forward_tails(self, head, edge_type, tails):
-        r = self.weights[edge_type]
+        head = jax.lax.complex(head[0], head[1])
+        tails = jax.lax.complex(tails[:, 0], tails[:, 1])
+
+        weights_complex = jax.lax.complex(self.weights[0], self.weights[1])
+        r = weights_complex[edge_type, :]
         # return jnp.sum((head * r) * tails, axis=1)
         return jnp.einsum('c,cd,ed->e', head, jnp.diag(r), jnp.conjugate(tails)).real
         # For some reason, this is faster than the einsum 'c,c,ec->e', which would make much more sense.
