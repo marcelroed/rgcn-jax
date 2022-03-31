@@ -98,7 +98,7 @@ def train():
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
 
-    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=dataset.num_relations, edge_index=dataset.edge_index, edge_type=dataset.edge_type)
+    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=dataset.num_relations, edge_index=pos_edge_index, edge_type=pos_edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
 
     model = RGCNModel([100], dataset.num_nodes, dataset.num_relations, key)
