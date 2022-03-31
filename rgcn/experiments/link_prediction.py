@@ -19,14 +19,8 @@ from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_ba
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
-import numpy as np
-from functools import partial
-
-from joblib import Memory
-
-memory = Memory('/tmp/joblib')
-
-jax.config.update('jax_log_compiles', False)
+jax.config.update('jax_log_compiles', True)
+jax.config.update('jax_debug_nans', True)
 
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
@@ -125,7 +119,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 100
+    num_epochs = 500
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
@@ -146,6 +140,9 @@ def train():
     #    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
     get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
+
+    opt_update = jax.jit(optimizer.update)
+
     try:
         for i in t:
             use_key, key = jrandom.split(key)
@@ -154,10 +151,10 @@ def train():
             # print(pos_mask)
             # print(all_data)
             loss, grads = loss_fn(model, all_data, train_data, pos_mask)
-            updates, opt_state = optimizer.update(grads, opt_state)
-            # scores = model(train_data)
-            # x = scores[train_data.edge_masks].sum()
-            # y = scores[~train_data.edge_masks].sum()
+            updates, opt_state = opt_update(grads, opt_state)
+            #scores = model(train_data)
+            #x = scores[train_data.edge_masks].sum()
+            #y = scores[~train_data.edge_masks].sum()
             # t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
             t.set_description(f'\tLoss: {loss}')
             t.refresh()
