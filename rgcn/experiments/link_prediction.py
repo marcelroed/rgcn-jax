@@ -9,7 +9,8 @@ import optax
 from tqdm import trange
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
-from rgcn.models.link_prediction import DistMultModel, compute_loss
+from rgcn.models.link_prediction import GenericModel, TransEModel, ComplExModel, SimplEModel
+from rgcn.layers.decoder import DistMult, RESCAL
 import jax.random as jrandom
 import jax.numpy as jnp
 import equinox as eqx
@@ -25,16 +26,6 @@ memory = Memory('/tmp/joblib')
 jax.log_compiles(True)
 
 
-def get_head_corrupted(head, tail, num_nodes):
-    range_n = jnp.arange(0, num_nodes, dtype=jnp.int32)
-    return jnp.stack((range_n, jnp.ones(num_nodes, dtype=jnp.int32) * tail))
-
-
-def get_tail_corrupted(head, tail, num_nodes):
-    range_n = jnp.arange(0, num_nodes, dtype=jnp.int32)
-    return jnp.stack((jnp.ones(num_nodes, dtype=jnp.int32) * head, range_n))
-
-
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
 
 
@@ -46,17 +37,11 @@ def wrapper(model, num_nodes, batch_dim=50, mode: Literal['head', 'tail'] = 'hea
         # test_data: [n_test_edges, 3]
         @jax.vmap  # [n_test_edges, 3] -> [n_test_edges, n_nodes]
         def loop(x):  # [3,] -> [n_nodes,]
-            # x: [3, ]
-            head = x[0]  # []
-            tail = x[1]  # []
-            corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
+            head, tail, relation_type = x[0], x[1], x[2]
             if mode == 'head':
-                corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
+                return model.forward_heads(relation_type, tail)
             else:
-                corrupted_edge_index = get_tail_corrupted(head, tail, num_nodes)  # [2, num_nodes]
-            scores = model(corrupted_edge_index, corrupted_edge_type)  # [num_nodes, ]
-            # return jnp.array([head, tail, x[2]])
-            return scores
+                return model.forward_tails(relation_type, head)
 
         # Batch the test data
         # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)
@@ -122,17 +107,17 @@ def make_dense_relation_edges(edge_index, edge_type, num_nodes):
 
 
 def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
-    dense_tensor = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
-    dense_tensor = jnp.array(dense_tensor, dtype=jnp.int32)
-    gc.collect()
+    # dense_tensor = make_dense_relation_edges(*map(np.array, (edge_index, edge_type, num_nodes)))
+    # dense_tensor = jnp.array(dense_tensor, dtype=jnp.int32)
+    # gc.collect()
 
     # dense_tensor: [n_relations, num_nodes, max_num_neighbors]
 
-    @partial(jax.vmap, in_axes=1, out_axes=0)
-    def isin(triple):
-        head, tail, edge_type = triple
-        dense_edge_index = dense_tensor[edge_type, head]
-        return jnp.isin(tail, dense_edge_index)
+    # @partial(jax.vmap, in_axes=1, out_axes=0)
+    # def isin(triple):
+    #     head, tail, edge_type = triple
+    #     dense_edge_index = dense_tensor[edge_type, head]
+    #     return jnp.isin(tail, dense_edge_index)
 
     def perform(key):
         # Always generate one negative sample per positive sample
@@ -145,14 +130,14 @@ def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes):
 
         maybe_negative_samples = jnp.where(head_tail_mask, rand, edge_index)  # [2, num_edges]
 
-        maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
-                                                 axis=0)  # [3, num_edges]
-
-        positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
-        head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
-
-        definitely_negative_samples = jnp.where(head_or_tail_positive, rand2, maybe_negative_samples)  # [2, num_edges]
-        return definitely_negative_samples
+        # maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
+        #                                          axis=0)  # [3, num_edges]
+        #
+        # positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
+        # head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
+        #
+        # definitely_negative_samples = jnp.where(head_or_tail_positive, rand2, maybe_negative_samples)  # [2, num_edges]
+        return maybe_negative_samples
 
     return perform
 
@@ -228,9 +213,14 @@ def make_get_train_epoch_data_fast(pos_edge_index, pos_edge_type, num_nodes):
 @eqx.filter_jit
 @eqx.filter_value_and_grad
 def loss_fn(model, edge_index, edge_type, mask):
-    scores = model(edge_index, edge_type)
-    return compute_loss(scores, mask)
+    return model.loss(edge_index, edge_type, mask) + model.l2_loss() / (2 * edge_index.shape[1])
+    # 50: Filtered: MRRResults(mrr=0.5456010103225708, hits_at_10=0.8876000046730042, hits_at_3=0.708899974822998, hits_at_1=0.34860000014305115)
+    # 200, oldsampling: Filtered: MRRResults(mrr=0.7419325709342957, hits_at_10=0.9191000461578369, hits_at_3=0.8622000217437744, hits_at_1=0.6100000143051147)
+    # 200: 0.8109014630317688, loss=0.00489
+    # 200 (norm): 0.357095, loss=0.15281
 
+    #50 RESCAL: Filtered: MRRResults(mrr=0.6268602013587952, hits_at_10=0.8105000257492065, hits_at_3=0.6930999755859375, hits_at_1=0.5256999731063843)
+    #50: RESCAL: Filtered: MRRResults(mrr=0.6216883659362793, hits_at_10=0.8100999593734741, hits_at_3=0.6886999607086182, hits_at_1=0.5184999704360962)
 
 @dataclass
 class MRRResults:
@@ -291,14 +281,20 @@ def train():
     seed = 42
     key = jrandom.PRNGKey(seed)
     dataset = LinkPredictionWrapper.load_wordnet18()
-    model = DistMultModel(dataset.num_nodes, dataset.num_relations, 100, key)
-    optimizer = optax.adam(learning_rate=5e-1)
+    model = GenericModel(RESCAL, dataset.num_nodes, dataset.num_relations, 100, key)  # same settings for DistMult and RESCAL
+    optimizer = optax.adam(learning_rate=0.5)
+    # model = ComplExModel(dataset.num_nodes, dataset.num_relations, 150, key)
+    # optimizer = optax.adam(learning_rate=0.05)  # ComplEx
+    # model = SimplEModel(dataset.num_nodes, dataset.num_relations, 150, key)  # same settings for SimplE and ComplEx
+    # optimizer = optax.adam(learning_rate=0.05)  # ComplEx
+    # model = TransEModel(dataset.num_nodes, dataset.num_relations, 50, 2, key)
+    # optimizer = optax.adam(learning_rate=0.01)  # TransE
     opt_state = optimizer.init(model)
 
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 1000
+    num_epochs = 500  # TransE: 1000 epochs, ComplEx: 100–200 epochs, RESCAL: 500 epochs
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
@@ -320,10 +316,12 @@ def train():
 
     # key1, key2 = jrandom.split(jrandom.PRNGKey(seed))
 
+    model.normalize()
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
     print('Starting test scores')
     head_corrupt_scores = wrapper(model, dataset.num_nodes, mode='head')(test_data)
+    print('Computed head scores')
     tail_corrupt_scores = wrapper(model, dataset.num_nodes, mode='tail')(test_data)
     print('Finished test scores')
     # print(test_data.shape)
