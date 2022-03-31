@@ -222,7 +222,7 @@ class RGCNModel(eqx.Module, BaseModel):
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
-    def __call__(self, edge_index, rel, all_data):
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData):
         x = None
         for layer in self.rgcns:
             x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))

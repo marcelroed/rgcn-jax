@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax.random as jrandom
 import optax
+from einops import rearrange
 
 jax.config.update('jax_log_compiles', True)
 
@@ -46,6 +47,7 @@ class RGCNConv(eqx.Module):
     in_channels: int
     out_channels: int
     n_relations: int
+    normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
 
     def __init__(self, in_channels, out_channels, n_relations,
                  decomposition_method: Literal['none', 'basis', 'block'], n_decomp: Optional[int], key):
@@ -74,6 +76,13 @@ class RGCNConv(eqx.Module):
         return self_transform
 
     def get_work_relation(self, x, edge_type_idcs, edge_masks):
+        node_normalizing_constant = None
+        if self.normalizing_constant == 'per_relation':
+            num_nodes = x.shape[0] if x is not None else self.relation_weights[0].shape[0]
+            flattened_edge_idcs = rearrange(edge_type_idcs, 'relations node edges -> node (relations edges)')
+            flattened_edge_mask = rearrange(edge_masks, 'relations edges -> (relations edges)')
+            node_normalizing_constant = jnp.zeros((num_nodes,)).at[flattened_edge_idcs[1]].add(jnp.where(flattened_edge_mask, 1, 0))
+
         @jax.jit
         def work_relation(rel, state):
             prev_out = state
@@ -93,8 +102,11 @@ class RGCNConv(eqx.Module):
 
             # Scatter the out_rel to the target nodes
             out_term = jnp.zeros(prev_out.shape).at[rel_edge_index[1], :].add(jnp.where(edge_mask, out_rel[rel_edge_index[0], :], 0), )
-            n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(jnp.where(edge_mask, 1, 0),)
-            out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
+            if self.normalizing_constant == 'per_relation_node':
+                n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(jnp.where(edge_mask, 1, 0),)
+                out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
+            elif self.normalizing_constant == 'per_node':
+                out_term = out_term / node_normalizing_constant.reshape(-1, 1)
             out = prev_out + out_term
             return out
         return work_relation
@@ -107,7 +119,6 @@ class RGCNConv(eqx.Module):
 
         # self_transform: [num_nodes, out_channels]
 
-        # edge_index: [2, num_edges]
         work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
 
         # Transform all the nodes using each relation transform
