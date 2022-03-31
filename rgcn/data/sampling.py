@@ -34,15 +34,16 @@ def make_dense_batched_negative_sample(edge_index, edge_type, num_nodes, num_edg
         head_tail_mask = jnp.concatenate([head_or_tail, ~head_or_tail], axis=0)  # [2, num_edges]
 
         maybe_negative_samples = jnp.where(head_tail_mask, rand, edge_index)  # [2, num_edges]
+        return maybe_negative_samples
 
-        maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
-                                                 axis=0)  # [3, num_edges]
-
-        positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
-        head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
-
-        definitely_negative_samples = jnp.where(head_or_tail_positive, rand2, maybe_negative_samples)  # [2, num_edges]
-        return definitely_negative_samples
+        # maybe_negative_triples = jnp.concatenate([maybe_negative_samples, edge_type.reshape(1, -1)],
+        #                                          axis=0)  # [3, num_edges]
+        #
+        # positive_mask = isin(maybe_negative_triples).reshape(1, num_edges)  # [1, num_edges]
+        # head_or_tail_positive = head_or_tail * positive_mask  # [2, num_edges]
+        #
+        # definitely_negative_samples = jnp.where(head_or_tail_positive, rand2, maybe_negative_samples)  # [2, num_edges]
+        # return definitely_negative_samples
 
     return perform
 

@@ -10,7 +10,6 @@ import numpy as np
 from jax import numpy as jnp
 from tqdm import trange
 
-from rgcn.data.utils import get_head_corrupted, get_tail_corrupted
 from rgcn.utils import memory
 from rgcn.utils.algorithms import parallel_argsort_last
 
@@ -58,7 +57,6 @@ def test_generate_mrr2():
     test_edge_type = np.array([0, 0, 1])
     test_data = np.concatenate((test_edge_index, test_edge_type[None, :]), axis=0)
     num_nodes = 5
-
 
     head_mask, tail_mask = generate_mrr_filter_mask(edge_index, edge_type, num_nodes, test_data)
 
@@ -120,8 +118,11 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
 
 
 def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
+    print('Computing scores')
     head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='head')(test_data)
+    print('Computed head scores')
     tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='tail')(test_data)
+    print('Computed tail scores')
     unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
@@ -149,18 +150,11 @@ def make_generate_logits(model, num_nodes, all_data, batch_dim=50, mode: Literal
         # test_data: [n_test_edges, 3]
         @jax.vmap  # [n_test_edges, 3] -> [n_test_edges, n_nodes]
         def loop(x):  # [3,] -> [n_nodes,]
-            # x: [3, ]
-            head = x[0]  # []
-            tail = x[1]  # []
-            #corrupted_edge_type = x[2].repeat(num_nodes)  # [num_nodes, ]
+            head, tail, relation_type = x[0], x[1], x[2]
             if mode == 'head':
-                corrupted_edge_index = get_head_corrupted(head, tail, num_nodes)  # [2, num_nodes]
+                return model.forward_heads(node_embeddings, relation_type, tail)
             else:
-                corrupted_edge_index = get_tail_corrupted(head, tail, num_nodes)  # [2, num_nodes]
-            scores = model.call_special(corrupted_edge_index, x[2], node_embeddings)  # [num_nodes, ]
-            #scores = model.single_relation(corrupted_edge_index, x[2])  # [num_nodes, ]
-            # return jnp.array([head, tail, x[2]])
-            return scores
+                return model.forward_tails(node_embeddings, relation_type, head)
 
         # Batch the test data
         # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)

@@ -5,7 +5,6 @@ from typing import Tuple
 
 import numpy as np
 import torch
-import jax.numpy as jnp
 import chex
 from jax import numpy as jnp
 from tqdm import trange
@@ -46,16 +45,6 @@ def test_torch_to_jax():
     tensor = torch.tensor([[1, 2, 3], [4, 5, 6]])
     jax_array = torch_to_jax(tensor)
     chex.assert_trees_all_equal(jax_array, jnp.array([[1, 2, 3], [4, 5, 6]]))
-
-
-def get_head_corrupted(head, tail, num_nodes):
-    range_n = jnp.arange(0, num_nodes, dtype=jnp.int32)
-    return jnp.stack((range_n, jnp.ones(num_nodes, dtype=jnp.int32) * tail))
-
-
-def get_tail_corrupted(head, tail, num_nodes):
-    range_n = jnp.arange(0, num_nodes, dtype=jnp.int32)
-    return jnp.stack((jnp.ones(num_nodes, dtype=jnp.int32) * head, range_n))
 
 
 def encode(edge_index, num_nodes):

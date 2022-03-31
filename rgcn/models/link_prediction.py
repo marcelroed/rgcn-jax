@@ -9,21 +9,27 @@ import jax.random as jrandom
 import jax
 import jax.numpy as jnp
 
-from rgcn.layers.decoder import DistMult, ComplEx
+from rgcn.layers.decoder import Decoder, ComplEx, SimplE, TransE, DistMult
 from rgcn.layers.rgcn import RGCNConv
-from rgcn.data.utils import make_dense_relation_edges, BaseConfig
+from rgcn.data.utils import BaseConfig
 from warnings import warn
+from abc import ABC, abstractmethod
 
 
 def safe_log(x, eps=1e-15):
     return jnp.log(jnp.clip(x, eps, None))
 
 
-def compute_loss(x, y):
+def cross_entropy_loss(x, y):
     # max_val = jnp.clip(x, 0, None)
     # loss = x - x * y + max_val + safe_log(jnp.exp(-max_val) + jnp.exp((-x - max_val)))
     # return loss.mean()
     return optax.sigmoid_binary_cross_entropy(x, y).mean()
+
+
+def margin_ranking_loss(scores_pos, scores_neg, gamma):
+    final = jnp.clip(gamma - scores_pos + scores_neg, 0, None)
+    return jnp.sum(final)
 
 
 @pytree_dataclass
@@ -40,17 +46,144 @@ class BasicModelData:
         return cls(edge_index=edge_index, edge_type=edge_type)
 
 
-class ComplExModel(eqx.Module):
-    decoder: ComplEx
+class BaseModel(ABC):
+    @abstractmethod
+    def __call__(self, edge_index, edge_type, all_data):
+        pass
+
+    @abstractmethod
+    def normalize(self):
+        pass
+
+    @abstractmethod
+    def get_node_embeddings(self, all_data):
+        pass
+
+    @abstractmethod
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        pass
+
+    @abstractmethod
+    def forward_tails(self, node_embeddings, relation_type, head):
+        pass
+
+    @abstractmethod
+    def loss(self, edge_index, edge_type, mask, all_data):
+        pass
+
+    @abstractmethod
+    def l2_loss(self):
+        pass
+
+
+class GenericShallowModel(eqx.Module, BaseModel):
+    @dataclass
+    class Config(BaseConfig):
+        n_channels: int
+        l2_reg: Optional[float] = None
+        name: Optional[str] = None
+
+    decoder: Decoder
     initializations: jnp.ndarray
+    l2_reg: Optional[float]
 
-    def __init__(self, n_nodes, n_relations, n_channels, key):
+    def __init__(self, decoder, config: Config, n_nodes, n_relations, key):
+        super().__init__()
+        self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.normal()(key, (n_nodes, n_channels), dtype=jnp.complex64)
-        self.decoder = ComplEx(n_relations, n_channels, key2)
+        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
+        self.decoder = decoder(n_relations, config.n_channels, key2)
 
-    def __call__(self, edge_index, edge_type):
-        return self.decoder(self.initializations, edge_index, edge_type).real
+    def __call__(self, edge_index, edge_type, all_data):
+        return self.decoder(self.initializations, edge_index, edge_type)
+
+    def normalize(self):  # Do not JIT
+        object.__setattr__(self, 'initializations',
+                           self.initializations / jnp.linalg.norm(self.initializations, axis=1, keepdims=True))
+
+    def get_node_embeddings(self, all_data):
+        return self.initializations
+
+    def forward_heads(self, node_embeddings, edge_type, tail):
+        return self.decoder.forward_heads(node_embeddings, edge_type, node_embeddings[tail])
+
+    def forward_tails(self, node_embeddings, edge_type, head):
+        return self.decoder.forward_tails(node_embeddings[head], edge_type, node_embeddings)
+
+    def loss(self, edge_index, edge_type, mask, all_data):
+        scores = self(edge_index, edge_type, None)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        if self.l2_reg is None:
+            return jnp.array(0.)
+        return self.l2_reg * (jnp.square(self.decoder.weights).sum())
+
+
+class ComplExModel(GenericShallowModel):
+    def __init__(self, config: GenericShallowModel.Config, n_nodes, n_relations, key):
+        key1, key2, key3 = jrandom.split(key, 3)
+        super().__init__(decoder=ComplEx, config=config,
+                         n_nodes=n_nodes, n_relations=n_relations, key=key3)
+
+        # [n_nodes, 2, n_channels] -- first real, then imaginary
+        self.initializations = jax.lax.complex(
+            jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
+            jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))
+        )
+
+    def normalize(self):
+        pass
+
+    def l2_loss(self):
+        if self.l2_reg is None:
+            return jnp.array(0.)
+
+        return self.l2_reg * self.decoder.l2_loss()
+
+
+class SimplEModel(GenericShallowModel):
+
+    def __init__(self, config: GenericShallowModel.Config, n_nodes, n_relations, key):
+        key1, key2, key3 = jrandom.split(key, 3)
+        super().__init__(SimplE, config, n_nodes, n_relations, key3)
+
+        # [n_nodes, 2, n_channels] -- first real, then imaginary
+        self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
+                                          jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))], 1)
+
+    def normalize(self):
+        pass
+
+    def l2_loss(self):
+        if self.l2_reg is None:
+            return jnp.array(0.)
+        return self.l2_reg * (
+                jnp.square(self.decoder.weights).sum() +
+                jnp.square(self.decoder.weights_inv).sum() +
+                jnp.square(self.initializations).sum()
+        )
+
+
+class TransEModel(GenericShallowModel):
+    @dataclass
+    class Config(GenericShallowModel.Config):
+        margin: int = 2
+
+    margin: int
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__(TransE, config, n_nodes, n_relations, key)
+        self.margin = config.margin
+
+    def normalize(self):
+        pass
+
+    def loss(self, edge_index, edge_type, mask, all_data):
+        neg_start_index = edge_index.shape[1] // 2
+        scores_pos = self(edge_index[:, :neg_start_index], edge_type[:neg_start_index], all_data)
+        scores_neg = self(edge_index[:, neg_start_index:], edge_type[neg_start_index:], all_data)
+        return margin_ranking_loss(scores_pos, scores_neg, self.margin)
 
 
 @pytree_dataclass
@@ -67,26 +200,7 @@ class RGCNModelTrainingData:
         return cls(edge_type_idcs, edge_masks)
 
 
-class DistMultModel(eqx.Module):
-    decoder: DistMult
-    initializations: jnp.ndarray
-
-    @dataclass
-    class Config(BaseConfig):
-        n_channels: int
-        name: Optional[str] = None
-
-    def __init__(self, config: Config, n_nodes, n_relations, key):
-        super().__init__()
-        key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
-        self.decoder = DistMult(n_relations, config.n_channels, key2)
-
-    def __call__(self, edge_index, rel):
-        return self.decoder(self.initializations, edge_index, rel)
-
-
-class RGCNModel(eqx.Module):
+class RGCNModel(eqx.Module, BaseModel):
     rgcns: list[RGCNConv]
     decoder: DistMult
 
@@ -98,14 +212,15 @@ class RGCNModel(eqx.Module):
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
 
-    def __init__(self, hidden_channels, n_nodes, n_relations, key):
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__()
         key1, key2 = jrandom.split(key)
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
                      decomposition_method='basis', n_decomp=2, key=key1)
-            for in_channels, out_channels in zip([n_nodes] + hidden_channels[:-1], hidden_channels)
+            for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
-        self.decoder = DistMult(n_relations, hidden_channels[-1], key2)
+        self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, edge_index, rel, all_data):
         x = None
@@ -120,10 +235,23 @@ class RGCNModel(eqx.Module):
             x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
         return x
 
-    def call_special(self, edge_index, rel, node_embeddings):
-        return self.decoder(node_embeddings, edge_index, rel)
+    def normalize(self):
+        pass
 
-    #def single_relation(self, edge_index, rel):
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        return self.decoder.forward_heads(node_embeddings, relation_type, node_embeddings[tail])
+
+    def forward_tails(self, node_embeddings, relation_type, head):
+        return self.decoder.forward_tails(node_embeddings[head], relation_type, node_embeddings)
+
+    def loss(self, edge_index, edge_type, mask, all_data):
+        scores = self(edge_index, edge_type, all_data)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        return 0  # TODO: implement L2 regularization
+
+    # def single_relation(self, edge_index, rel):
     #   x = None
     #    for layer in self.rgcns:
     #        x = layer(x, edge_index, rel)
