@@ -32,22 +32,13 @@ class EntityClassificationWrapper:
         dataset = Entities(root=root + dataset_name.lower(), name=dataset_name)
         edge_index = dataset.data.edge_index.numpy()
         edge_type = torch_to_jax(dataset.data.edge_type)
-        max_edge_index_length = max([jnp.sum(edge_type == i) for i in range(dataset.num_relations)])
         test_idx_original = torch_to_jax(dataset.data.test_idx)
         test_y_original = torch_to_jax(dataset.data.test_y)
 
         val_idx, test_idx = jnp.split(test_idx_original, [len(test_idx_original) // 5])
         val_y, test_y = jnp.split(test_y_original, [len(test_y_original) // 5])
 
-        # padded: [n_relations, 2, max_edge_index_length]
-        padded = [np.pad(edge_index[:, i == edge_type], ((0, 0), (0, max_edge_index_length - (i == edge_type).sum()))) for i in range(dataset.num_relations)]
-        mask_lengths = [np.sum(edge_type == i) for i in range(dataset.num_relations)]
-
-        # masks: [n_relations, max_edge_index_length]
-        masks = [np.concatenate((np.ones(ml, dtype=bool), np.zeros(max_edge_index_length - ml, dtype=bool)), axis=0) for ml in mask_lengths]
-        np_masks = np.stack(masks, axis=0)
-        np_padded = np.stack(padded, axis=0)
-        del padded; del masks; gc.collect()
+        np_masks, np_padded = make_dense_relation_tensor(dataset, edge_index, edge_type)
 
         instance = cls(
             name=dataset_name,
@@ -72,6 +63,23 @@ class EntityClassificationWrapper:
 
         return instance
 
+
+def make_dense_relation_tensor(num_relations, edge_index, edge_type):
+    max_edge_index_length = max([jnp.sum(edge_type == i) for i in range(num_relations)])
+
+    # padded: [n_relations, 2, max_edge_index_length]
+    # 1300 * 2 * 20_000
+    padded = [np.pad(edge_index[:, i == edge_type], ((0, 0), (0, max_edge_index_length - (i == edge_type).sum())))
+              for i in range(num_relations)]
+    mask_lengths = [np.sum(edge_type == i) for i in range(num_relations)]
+
+    # masks: [n_relations, max_edge_index_length]
+    masks = [np.concatenate((np.ones(ml, dtype=bool), np.zeros(max_edge_index_length - ml, dtype=bool)), axis=0) for
+             ml in mask_lengths]
+    np_mask = np.stack(masks, axis=0)
+    np_padded = np.stack(padded, axis=0)
+    del padded; del masks; gc.collect()
+    return np_padded, np_mask
 
 
 def test_dataset_structure():

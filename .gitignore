@@ -135,3 +135,8 @@ dmypy.json
 *.pkl
 *.png
 *.json
+
+*.pt
+train.txt
+test.txt
+valid.txt
