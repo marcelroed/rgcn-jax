@@ -139,7 +139,7 @@ class ComplExModel(GenericShallowModel):
         if self.l2_reg is None:
             return jnp.array(0.)
 
-        return self.l2_reg * self.decoder.l2_loss()
+        return self.l2_reg * (self.decoder.l2_loss() + jnp.square(self.initializations).sum())
 
 
 class SimplEModel(GenericShallowModel):
