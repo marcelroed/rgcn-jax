@@ -112,6 +112,8 @@ def train():
     get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
 
+    opt_update = jax.jit(optimizer.update)
+
     try:
         for i in t:
             use_key, key = jrandom.split(key)
@@ -120,7 +122,7 @@ def train():
             #print(pos_mask)
             #print(all_data)
             loss, grads = loss_fn(model, all_data, train_data, pos_mask)
-            updates, opt_state = optimizer.update(grads, opt_state)
+            updates, opt_state = opt_update(grads, opt_state)
             #scores = model(train_data)
             #x = scores[train_data.edge_masks].sum()
             #y = scores[~train_data.edge_masks].sum()
