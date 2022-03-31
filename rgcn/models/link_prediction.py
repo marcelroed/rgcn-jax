@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import optax
 from jax_dataclasses import pytree_dataclass
 
 import equinox as eqx
@@ -14,10 +15,15 @@ from rgcn.data.utils import make_dense_relation_edges, BaseConfig
 from warnings import warn
 
 
+def safe_log(x, eps=1e-15):
+    return jnp.log(jnp.clip(x, eps, None))
+
+
 def compute_loss(x, y):
-    max_val = jnp.clip(x, 0, None)
-    loss = x - x * y + max_val + jnp.log(jnp.exp(-max_val) + jnp.exp((-x - max_val)))
-    return loss.mean()
+    # max_val = jnp.clip(x, 0, None)
+    # loss = x - x * y + max_val + safe_log(jnp.exp(-max_val) + jnp.exp((-x - max_val)))
+    # return loss.mean()
+    return optax.sigmoid_binary_cross_entropy(x, y).mean()
 
 
 @pytree_dataclass
@@ -104,14 +110,14 @@ class RGCNModel(eqx.Module):
     def __call__(self, edge_index, rel, all_data):
         x = None
         for layer in self.rgcns:
-            x = layer(x, all_data.edge_type_idcs, all_data.edge_masks)
+            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
         x = self.decoder(x, edge_index, rel)
         return x
 
     def get_node_embeddings(self, all_data):
         x = None
         for layer in self.rgcns:
-            x = layer(x, all_data.edge_type_idcs, all_data.edge_masks)
+            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
         return x
 
     def call_special(self, edge_index, rel, node_embeddings):

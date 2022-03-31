@@ -15,6 +15,7 @@ from rgcn.models.link_prediction import compute_loss, RGCNModel, RGCNModelTraini
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 jax.config.update('jax_log_compiles', True)
+jax.config.update('jax_debug_nans', True)
 
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
@@ -91,7 +92,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = 100
+    num_epochs = 500
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
