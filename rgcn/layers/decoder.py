@@ -84,44 +84,35 @@ def test_distmult():
 
 class ComplEx(eqx.Module, Decoder):
     n_relations: int
-    weights_r: jnp.ndarray
-    weights_i: jnp.ndarray
+    weights: jnp.ndarray
 
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
         key1, key2 = random.split(key, 2)
-        self.weights_r = jax.nn.initializers.normal()(key1, (n_relations, n_channels))
-        self.weights_i = jax.nn.initializers.normal()(key2, (n_relations, n_channels))
-        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+        init = jax.nn.initializers.normal()
+        real, imag = init(key1, (n_relations, n_channels)), init(key2, (n_relations, n_channels))
+        self.weights = jax.lax.complex(real, imag).astype(jnp.complex64)
 
     def __call__(self, x, edge_index, edge_type):
-        # x: [n_nodes, 2, n_channels] -- first real, then imaginary
-        s_r, s_i = x[edge_index[0, :], 0, :], x[edge_index[0, :], 1, :]  # [n_edges, n_channels]
-        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]  # [n_edges, n_channels]
-        o_r, o_i = x[edge_index[1, :], 0, :], x[edge_index[1, :], 1, :]  # [n_edges, n_channels]
+        s = x[edge_index[0, :], :]  # [n_edges, n_channels]
+        r = self.weights[edge_type, :]  # [n_edges, n_channels]
+        o = jnp.conjugate(x[edge_index[1, :], :])  # [n_edges, n_channels]
 
-        return (s_r * r_r * o_r +
-                s_r * r_i * o_i +
-                s_i * r_r * o_i -
-                s_i * r_i * o_r).sum(axis=1)
+        return jnp.sum(s * r * o, axis=1).real
 
     def forward_heads(self, heads, edge_type, tail):
-        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]
-        o_r, o_i = tail[0, :], tail[1, :]
-        s_r, s_i = heads[:, 0, :], heads[:, 1, :]
-        return (s_r * (r_r * o_r) +
-                s_r * (r_i * o_i) +
-                s_i * (r_r * o_i) -
-                s_i * (r_i * o_r)).sum(axis=1)
+        r = self.weights[edge_type]
+        # return jnp.sum(heads * (r * tail), axis=1)
+        return jnp.einsum('ec,c,c->e', heads, r, jnp.conjugate(tail)).real
 
     def forward_tails(self, head, edge_type, tails):
-        r_r, r_i = self.weights_r[edge_type, :], self.weights_i[edge_type, :]
-        s_r, s_i = head[0, :], head[1, :]
-        o_r, o_i = tails[:, 0, :], tails[:, 1, :]
-        return ((s_r * r_r) * o_r +
-                (s_r * r_i) * o_i +
-                (s_i * r_r) * o_i -
-                (s_i * r_i) * o_r).sum(axis=1)
+        r = self.weights[edge_type]
+        # return jnp.sum((head * r) * tails, axis=1)
+        return jnp.einsum('c,cd,ed->e', head, jnp.diag(r), jnp.conjugate(tails)).real
+        # For some reason, this is faster than the einsum 'c,c,ec->e', which would make much more sense.
+
+    def l2_loss(self):
+        return jnp.sum(self.weights.real**2 + self.weights.imag**2)
 
 
 def test_complex():
@@ -135,12 +126,14 @@ def test_complex():
     edge_index = jnp.array([[0, 1],
                             [0, 1]])
     edge_type = jnp.array([0, 1])
-    result = compl(x, edge_index, edge_type)
-    print(result)
-    complex_weights = np.array(compl.weights_i) * 1j + np.array(compl.weights_r)
+    result_jax = compl(x_, edge_index, edge_type)
+    complex_weights = np.array(compl.weights.imag) * 1j + np.array(compl.weights.real)
+
     s, r, o = x_[edge_index[0, :], :], complex_weights[edge_type, :], x_[edge_index[1, :], :]
-    result = np.sum(s * r * np.conj(o), axis=1).real
-    print(result)
+    result_np = np.sum(s * r * np.conj(o), axis=1).real
+    print(result_jax)
+    print(result_np)
+    assert jnp.allclose(result_jax, result_np)
 
 
 class SimplE(eqx.Module, Decoder):

@@ -121,14 +121,16 @@ class GenericShallowModel(eqx.Module, BaseModel):
 
 
 class ComplExModel(GenericShallowModel):
-
     def __init__(self, config: GenericShallowModel.Config, n_nodes, n_relations, key):
         key1, key2, key3 = jrandom.split(key, 3)
-        super().__init__(ComplEx, config, n_nodes, n_relations, key3)
+        super().__init__(decoder=ComplEx, config=config,
+                         n_nodes=n_nodes, n_relations=n_relations, key=key3)
 
         # [n_nodes, 2, n_channels] -- first real, then imaginary
-        self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
-                                          jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))], 1)
+        self.initializations = jax.lax.complex(
+            jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
+            jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))
+        )
 
     def normalize(self):
         pass
@@ -136,11 +138,8 @@ class ComplExModel(GenericShallowModel):
     def l2_loss(self):
         if self.l2_reg is None:
             return jnp.array(0.)
-        return self.l2_reg * (
-                jnp.square(self.decoder.weights_r).sum() +
-                jnp.square(self.decoder.weights_i).sum() +
-                jnp.square(self.initializations).sum()
-        )
+
+        return self.l2_reg * self.decoder.l2_loss()
 
 
 class SimplEModel(GenericShallowModel):
