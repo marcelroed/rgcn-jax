@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from jax import random as jrandom, numpy as jnp
+import equinox as eqx
+import jax
+
+from jax import random as jrandom, numpy as jnp, random as random
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.data.utils import encode, encode_with_type
+from rgcn.layers.decoder import Decoder
 
 
 def negative_sample(edge_index, num_nodes, num_negatives, key):
@@ -69,3 +73,45 @@ def get_train_epoch_data(dataset: LinkPredictionWrapper, key):
     full_edge_type = jnp.concatenate((pos_edge_type, neg_edge_type), axis=-1)
     pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
     return full_edge_index, full_edge_type, pos_mask
+
+
+class ComplExComplex(eqx.Module, Decoder):
+    n_relations: int
+    weights: jnp.ndarray
+
+    def __init__(self, n_relations, n_channels, key):
+        self.n_relations = n_relations
+        key1, key2 = random.split(key, 2)
+        init = jax.nn.initializers.normal()
+        real, imag = init(key1, (n_relations, n_channels)), init(key2, (n_relations, n_channels))
+        self.weights = jnp.stack((real, imag), axis=1)
+
+    def __call__(self, x, edge_index, edge_type):
+        x = jax.lax.complex(x[:, 0], x[:, 1])
+
+        s = x[edge_index[0, :], :]  # [n_edges, n_channels]
+        r = jax.lax.complex(self.weights[0], self.weights[1])[edge_type, :]  # [n_edges, n_channels]
+        o = jnp.conjugate(x[edge_index[1, :], :])  # [n_edges, n_channels]
+
+        return jnp.sum(s * r * o, axis=1).real
+
+    def forward_heads(self, heads, edge_type, tail):
+        heads = jax.lax.complex(heads[:, 0], heads[:, 1])
+        tail = jax.lax.complex(tail[0], tail[1])
+        weights_complex = jax.lax.complex(self.weights[0], self.weights[1])
+        r = weights_complex[edge_type, :]
+        # return jnp.sum(heads * (r * tail), axis=1)
+        return jnp.einsum('ec,c,c->e', heads, r, jnp.conjugate(tail)).real
+
+    def forward_tails(self, head, edge_type, tails):
+        head = jax.lax.complex(head[0], head[1])
+        tails = jax.lax.complex(tails[:, 0], tails[:, 1])
+
+        weights_complex = jax.lax.complex(self.weights[0], self.weights[1])
+        r = weights_complex[edge_type, :]
+        # return jnp.sum((head * r) * tails, axis=1)
+        return jnp.einsum('c,cd,ed->e', head, jnp.diag(r), jnp.conjugate(tails)).real
+        # For some reason, this is faster than the einsum 'c,c,ec->e', which would make much more sense.
+
+    def l2_loss(self):
+        return jnp.sum(self.weights.real**2 + self.weights.imag**2)
