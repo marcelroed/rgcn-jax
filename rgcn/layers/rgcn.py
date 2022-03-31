@@ -50,8 +50,8 @@ class RGCNConv(eqx.Module):
     normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
 
     def __init__(self, in_channels, out_channels, n_relations,
-                 decomposition_method: Literal['none', 'basis', 'block'], n_decomp: Optional[int], key):
-        super().__init__()
+                 decomposition_method: Literal['none', 'basis', 'block'], n_decomp: Optional[int],
+                 normalizing_constant: Literal['per_relation_node', 'per_node', 'none'], key):
         sw_key, rel_key = jrandom.split(key)
         self.in_channels = in_channels
         self.out_channels = out_channels
