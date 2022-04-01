@@ -127,9 +127,9 @@ class ComplExModel(GenericShallowModel):
                          n_nodes=n_nodes, n_relations=n_relations, key=key3)
 
         # [n_nodes, 2, n_channels] -- first real, then imaginary
-        self.initializations = jax.lax.complex(
-            jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
-            jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))
+        self.initializations = jnp.stack(
+            (jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
+             jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))), axis=1
         )
 
     def normalize(self):
@@ -139,7 +139,7 @@ class ComplExModel(GenericShallowModel):
         if self.l2_reg is None:
             return jnp.array(0.)
 
-        return self.l2_reg * self.decoder.l2_loss()
+        return self.l2_reg * (self.decoder.l2_loss() + jnp.square(self.initializations).sum())
 
 
 class SimplEModel(GenericShallowModel):
@@ -222,7 +222,7 @@ class RGCNModel(eqx.Module, BaseModel):
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
-    def __call__(self, edge_index, rel, all_data):
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData):
         x = None
         for layer in self.rgcns:
             x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))

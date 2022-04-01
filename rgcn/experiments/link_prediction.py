@@ -7,6 +7,7 @@ import jax.random as jrandom
 import optax
 from einops import rearrange
 from tqdm import trange
+import jax.experimental.host_callback as hcb
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, ComplExModel, SimplEModel, RGCNModel, \
@@ -91,7 +92,7 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask):
 
 model_configs = {
     'distmult': GenericShallowModel.Config(n_channels=100, name='DistMult'),  # 600 epochs
-    'complex': ComplExModel.Config(n_channels=150, name='ComplEx'),
+    'complex': ComplExModel.Config(n_channels=200, l2_reg=5e-4, name='ComplEx'),
     'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
     'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
     'rgcn': RGCNModel.Config(hidden_channels=[100], name='RGCN')
@@ -108,8 +109,8 @@ def train():
     # same settings for DistMult and RESCAL
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=0.5)
-    # model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
-    # optimizer = optax.adam(learning_rate=0.05)  # ComplEx
+    model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
+    optimizer = optax.adam(learning_rate=0.05)  # ComplEx
     # model = SimplEModel(model_configs['simple'], dataset.num_nodes, dataset.num_relations, key)  # same settings for SimplE and ComplEx
     # optimizer = optax.adam(learning_rate=0.05)  # SimplE
     # model = TransEModel(model_configs['transe'], dataset.num_nodes, dataset.num_relations, key)
@@ -129,8 +130,8 @@ def train():
                                                             edge_index=pos_edge_index, edge_type=pos_edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
 
-    model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
-    optimizer = optax.adam(learning_rate=1e-2)
+    # model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
+    # optimizer = optax.adam(learning_rate=1e-2)
     opt_state = optimizer.init(model)
 
     i = None
