@@ -20,8 +20,7 @@ from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_ba
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
-jax.config.update('jax_log_compiles', True)
-jax.config.update('jax_debug_nans', True)
+# jax.config.update('jax_log_compiles', True)
 
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
@@ -95,7 +94,7 @@ model_configs = {
     'complex': ComplExModel.Config(n_channels=200, l2_reg=5e-4, name='ComplEx'),
     'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
     'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
-    'rgcn': RGCNModel.Config(hidden_channels=[100], name='RGCN')
+    'rgcn': RGCNModel.Config(hidden_channels=[200], normalizing_constant='per_relation_node', name='RGCN')
 }
 
 
@@ -110,6 +109,7 @@ def train():
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=0.5)
     model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
+    print(model)
     #model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
     optimizer = optax.adam(learning_rate=0.05)  # ComplEx
     # model = SimplEModel(model_configs['simple'], dataset.num_nodes, dataset.num_relations, key)  # same settings for SimplE and ComplEx
@@ -133,7 +133,7 @@ def train():
 
     # model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=1e-2)
-    opt_state = optimizer.init(model)
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     i = None
     # if model.data_class.is_dense:

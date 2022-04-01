@@ -11,6 +11,7 @@ from jax import numpy as jnp
 from tqdm import trange
 
 from rgcn.utils import memory
+from rgcn.utils._utils import time_block
 from rgcn.utils.algorithms import parallel_argsort_last
 
 
@@ -99,9 +100,7 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
         mask = perm == test_edge_index[1, :].reshape((-1, 1))
 
     # Get the index of the true edges in the sorted list
-    print(mask.shape)
     true_index = np.argmax(mask, axis=1) + 1
-    print(true_index.shape)
     # Get the reciprocal rank of the true edges
     rr = 1.0 / true_index.astype(np.float32)
 
@@ -118,11 +117,11 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
 
 
 def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
-    print('Computing scores')
-    head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='head')(test_data)
-    print('Computed head scores')
-    tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='tail')(test_data)
-    print('Computed tail scores')
+    with time_block('Unfiltered MRR'):
+        with time_block('Computing head scores'):
+            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='head')(test_data)
+        with time_block('Computing tail scores'):
+            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='tail')(test_data)
     unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 

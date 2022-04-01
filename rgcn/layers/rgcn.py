@@ -9,7 +9,7 @@ import jax.random as jrandom
 import optax
 from einops import rearrange
 
-jax.config.update('jax_log_compiles', True)
+# jax.config.update('jax_log_compiles', True)
 
 
 class RelLinear(eqx.Module):
@@ -78,11 +78,12 @@ class RGCNConv(eqx.Module):
 
     def get_work_relation(self, x, edge_type_idcs, edge_masks):
         node_normalizing_constant = None
-        if self.normalizing_constant == 'per_relation':
+        if self.normalizing_constant == 'per_node':
             num_nodes = x.shape[0] if x is not None else self.relation_weights[0].shape[0]
             flattened_edge_idcs = rearrange(edge_type_idcs, 'relations node edges -> node (relations edges)')
             flattened_edge_mask = rearrange(edge_masks, 'relations edges -> (relations edges)')
             node_normalizing_constant = jnp.zeros((num_nodes,)).at[flattened_edge_idcs[1]].add(jnp.where(flattened_edge_mask, 1, 0))
+            node_normalizing_constant = jnp.where(node_normalizing_constant == 0, 1, node_normalizing_constant)
 
         @jax.jit
         def work_relation(rel, state):
@@ -90,8 +91,6 @@ class RGCNConv(eqx.Module):
             # edge_index[0] is the source node index
             # edge_mask = edge_type == rel
             # rel_edge_index = edge_index[:, edge_type_idcs == rel]
-            print(edge_masks)
-            print(rel)
             edge_mask = edge_masks[rel].reshape((-1, 1))
             rel_edge_index = edge_type_idcs[rel]
 
