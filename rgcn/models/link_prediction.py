@@ -221,6 +221,7 @@ class RGCNModel(eqx.Module, BaseModel):
         name: Optional[str] = None
         epochs: int = 10
         learning_rate: float = 0.5
+        seed: int = 42
 
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
