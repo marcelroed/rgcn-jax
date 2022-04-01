@@ -48,7 +48,7 @@ class BasicModelData:
 
 class BaseModel(ABC):
     @abstractmethod
-    def __call__(self, edge_index, edge_type, all_data):
+    def __call__(self, edge_index, edge_type, all_data, key):
         pass
 
     @abstractmethod
@@ -199,16 +199,28 @@ class RGCNModelTrainingData:
         # edge_type_idcs, edge_masks = make_dense_relation_edges(edge_index, edge_type, n_relations)
         return cls(edge_type_idcs, edge_masks)
 
+    def dropout(self, p: float, key):
+        if p is None:
+            return self
+        return self.__class__(self.edge_type_idcs,
+                              self.edge_masks * jrandom.bernoulli(key, p, self.edge_masks.shape))
+
 
 class RGCNModel(eqx.Module, BaseModel):
     rgcns: list[RGCNConv]
     decoder: DistMult
+    dropout_rate: Optional[float]
+    l2_reg: Optional[float]
 
     @dataclass
     class Config(BaseConfig):
         hidden_channels: list[int]
+        dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
         normalizing_constant: str = 'per_node'
+        l2_reg: Optional[float] = None
         name: Optional[str] = None
+        epochs: int = 10
+        learning_rate: float = 0.5
 
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
@@ -216,6 +228,8 @@ class RGCNModel(eqx.Module, BaseModel):
     def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         key1, key2 = jrandom.split(key)
+        self.dropout_rate = config.dropout_rate
+        self.l2_reg = config.l2_reg
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
                      decomposition_method='basis', normalizing_constant=config.normalizing_constant, n_decomp=2, key=key1)
@@ -223,10 +237,11 @@ class RGCNModel(eqx.Module, BaseModel):
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData):
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        dropout_all_data = all_data.dropout(self.dropout_rate, key)
         x = None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
+            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks))
         x = self.decoder(x, edge_index, rel)
         return x
 
@@ -245,12 +260,16 @@ class RGCNModel(eqx.Module, BaseModel):
     def forward_tails(self, node_embeddings, relation_type, head):
         return self.decoder.forward_tails(node_embeddings[head], relation_type, node_embeddings)
 
-    def loss(self, edge_index, edge_type, mask, all_data):
-        scores = self(edge_index, edge_type, all_data)
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, all_data, key=key)
         return cross_entropy_loss(scores, mask)
 
     def l2_loss(self):
-        return 0  # TODO: implement L2 regularization
+        if self.l2_reg:
+            # Don't regularize the weights in the RGCN
+            return jnp.sum(self.decoder.l2_loss())
+        else:
+            return jnp.array(0.)
 
     # def single_relation(self, edge_index, rel):
     #   x = None

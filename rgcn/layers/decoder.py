@@ -73,6 +73,9 @@ class DistMult(eqx.Module, Decoder):
         return jnp.einsum('c,cd,ed->e', head, jnp.diag(r), tails)
         # For some reason, this is faster than the einsum 'c,c,ec->e', which would make much more sense.
 
+    def l2_loss(self):
+        return jnp.sum(jnp.square(self.weights))
+
 
 def test_distmult():
     distmult = DistMult(n_relations=2, n_channels=2, key=random.PRNGKey(0))
