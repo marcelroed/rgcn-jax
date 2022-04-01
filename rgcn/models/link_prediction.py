@@ -217,7 +217,7 @@ class RGCNModel(eqx.Module, BaseModel):
         key1, key2 = jrandom.split(key)
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
-                     decomposition_method='basis', n_decomp=2, key=key1)
+                     decomposition_method='basis', normalizing_constant='per_node', n_decomp=2, key=key1)
             for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)

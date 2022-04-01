@@ -109,7 +109,8 @@ def train():
     # same settings for DistMult and RESCAL
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=0.5)
-    model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
+    model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
+    #model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
     optimizer = optax.adam(learning_rate=0.05)  # ComplEx
     # model = SimplEModel(model_configs['simple'], dataset.num_nodes, dataset.num_relations, key)  # same settings for SimplE and ComplEx
     # optimizer = optax.adam(learning_rate=0.05)  # SimplE
