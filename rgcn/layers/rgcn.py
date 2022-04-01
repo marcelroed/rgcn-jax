@@ -56,6 +56,7 @@ class RGCNConv(eqx.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.n_relations = n_relations
+        self.normalizing_constant = normalizing_constant
         glorot_initializer = jnn.initializers.glorot_uniform()
 
         self.self_weight = glorot_initializer(sw_key, (in_channels, out_channels), jnp.float32)
