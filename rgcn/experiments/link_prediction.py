@@ -54,7 +54,6 @@ def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
     # Generate the dense representation of the positive edges once to determine the shape
     dense_relation, dense_mask = make_dense_relation_tensor(num_relations=pos_edge_type.max() + 1,
                                                             edge_index=pos_edge_index, edge_type=pos_edge_type)
-    dense_relation_shape = dense_relation.shape
 
     dense_batched_negative_sample = make_dense_batched_negative_sample_dense_rel(edge_index=pos_edge_index,
                                                                                  edge_type=pos_edge_type,
@@ -82,13 +81,6 @@ def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
 def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, key):
     return model.loss(data.edge_index, data.edge_type, mask, all_data, key=key) + model.l2_loss() / (
             2 * data.edge_index.shape[1])
-    # 50: Filtered: MRRResults(mrr=0.5456010103225708, hits_at_10=0.8876000046730042, hits_at_3=0.708899974822998, hits_at_1=0.34860000014305115)
-    # 200, oldsampling: Filtered: MRRResults(mrr=0.7419325709342957, hits_at_10=0.9191000461578369, hits_at_3=0.8622000217437744, hits_at_1=0.6100000143051147)
-    # 200: 0.8109014630317688, loss=0.00489
-    # 200 (norm): 0.357095, loss=0.15281
-
-    # 50 RESCAL: Filtered: MRRResults(mrr=0.6268602013587952, hits_at_10=0.8105000257492065, hits_at_3=0.6930999755859375, hits_at_1=0.5256999731063843)
-    # 50: RESCAL: Filtered: MRRResults(mrr=0.6216883659362793, hits_at_10=0.8100999593734741, hits_at_3=0.6886999607086182, hits_at_1=0.5184999704360962)
 
 
 model_configs = {

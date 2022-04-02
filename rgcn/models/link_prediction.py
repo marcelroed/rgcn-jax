@@ -285,7 +285,7 @@ class RGCNModel(eqx.Module, BaseModel):
     def l2_loss(self):
         if self.l2_reg:
             # Don't regularize the weights in the RGCN
-            return self.l2_reg * jnp.sum(self.decoder.l2_loss())
+            return self.l2_reg * self.decoder.l2_loss()
         else:
             return jnp.array(0.)
 
