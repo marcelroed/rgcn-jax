@@ -102,9 +102,9 @@ model_configs = {
                                          epochs=200, learning_rate=0.5, seed=42),
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=250, learning_rate=0.05, seed=42, decomposition_method='basis')
+                             epochs=250, learning_rate=0.05, seed=42, decomposition_method='block')
 }
 
 
@@ -125,9 +125,9 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = model_config.epochs and 1
+    num_epochs = model_config.epochs  # and 1
 
-    t = trange(num_epochs)
+    pbar = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
 
@@ -140,7 +140,6 @@ def train():
 
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
-    i = None
     # if model.data_class.is_dense:
     #    get_train_epoch_data_fast = make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes)
     # else:
@@ -149,21 +148,17 @@ def train():
 
     opt_update = jax.jit(optimizer.update)
 
+    i = None
     try:
-        for i in t:
+        for i in pbar:
             data_key, model_key, key = jrandom.split(key, 3)
             train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
-            # print(train_data)
-            # print(pos_mask)
-            # print(all_data)
+
             loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
             updates, opt_state = opt_update(grads, opt_state)
-            # scores = model(train_data)
-            # x = scores[train_data.edge_masks].sum()
-            # y = scores[~train_data.edge_masks].sum()
-            # t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
-            t.set_description(f'\tLoss: {loss}')
-            t.refresh()
+
+            pbar.set_description(f'\tLoss: {loss}')
+            pbar.refresh()
             model = eqx.apply_updates(model, updates)
     except KeyboardInterrupt:
         print(f'Interrupted training at epoch {i}')

@@ -45,7 +45,7 @@ class DecomposedRelLinear(eqx.Module):
         return jnp.einsum('b,bio->io', self.base_weights[relation_index], self.bases)
 
     def apply(self, rel, x):
-        return self[rel](x)
+        return jnp.matmul(x, self[rel])
 
     def apply_id(self, rel):
         return self[rel]
