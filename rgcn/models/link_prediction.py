@@ -246,7 +246,7 @@ class RGCNModel(eqx.Module, BaseModel):
         # Use 2 bases or 5 blocks
         n_decomp = 2 if config.decomposition_method == 'basis' else 100 if config.decomposition_method == 'block' else None
         self.rgcns = [
-            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
+            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
                      decomposition_method=config.decomposition_method, normalizing_constant=config.normalizing_constant,
                      dropout_rate=config.node_dropout_rate, n_decomp=n_decomp, key=key1)
             for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
