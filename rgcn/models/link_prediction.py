@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Literal
 
 import optax
 from jax_dataclasses import pytree_dataclass
@@ -215,8 +215,9 @@ class RGCNModel(eqx.Module, BaseModel):
     @dataclass
     class Config(BaseConfig):
         hidden_channels: list[int]
-        dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
-        normalizing_constant: str = 'per_node'
+        edge_dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
+        node_dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
+        normalizing_constant: Literal['per_relation_node', 'per_node', 'none'] = 'per_node'
         l2_reg: Optional[float] = None
         name: Optional[str] = None
         epochs: int = 10
@@ -229,27 +230,29 @@ class RGCNModel(eqx.Module, BaseModel):
     def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         key1, key2 = jrandom.split(key)
-        self.dropout_rate = config.dropout_rate
+        self.dropout_rate = config.edge_dropout_rate
         self.l2_reg = config.l2_reg
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
-                     decomposition_method='basis', normalizing_constant=config.normalizing_constant, n_decomp=2, key=key1)
+                     decomposition_method='basis', normalizing_constant=config.normalizing_constant, dropout_rate=config.node_dropout_rate, n_decomp=2, key=key1)
             for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
-        dropout_all_data = all_data.dropout(self.dropout_rate, key)
+        dropout_key, key = jrandom.split(key)
+        dropout_all_data = all_data.dropout(self.dropout_rate, dropout_key)
         x = None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks))
+            layer_key, key = jrandom.split(key)
+            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks, layer_key))
         x = self.decoder(x, edge_index, rel)
         return x
 
     def get_node_embeddings(self, all_data):
         x = None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
+            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks, key=None))
         return x
 
     def normalize(self):

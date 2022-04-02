@@ -66,29 +66,26 @@ def make_dense_relation_neighbors(edge_index, edge_type, num_nodes):
     """
     n_relations = edge_type.max() + 1
     # Reshape the edge_index matrix (and edge_type) to [n_relations, num_nodes, max_num_neighbors]
-    result = []
     max_num_neighbors = 0
-    for relation in trange(n_relations, desc='Finding neighbors'):
-        gc.collect()
+    for relation in trange(n_relations, desc='Finding max num neighbors'):
         rel_edge_index = edge_index[:, edge_type == relation]
-        rel_result = []
         for head in range(num_nodes):
             head_mask = rel_edge_index[0] == head
             tails_for_head = rel_edge_index[1, head_mask]
             max_num_neighbors = max(max_num_neighbors, tails_for_head.shape[0])
-            rel_result.append(tails_for_head)
-        result.append(rel_result)
 
     # Construct a result array
     result_tensor = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=int)
 
-    # Pad the inner arrays to shape [max_num_neighbors]
-    for relation in trange(n_relations, desc='Writing to tensor'):
-        gc.collect()
+    for relation in trange(n_relations, desc='Writing to array'):
+        rel_edge_index = edge_index[:, edge_type == relation]
         for head in range(num_nodes):
-            head_edges = result[relation][head]
-            result_tensor[relation][head] = np.pad(head_edges, (0, max_num_neighbors - head_edges.shape[0]), 'constant',
-                                                   constant_values=-1)
+            head_mask = rel_edge_index[0] == head
+            tails_for_head = rel_edge_index[1, head_mask]
+            max_num_neighbors = max(max_num_neighbors, tails_for_head.shape[0])
+            result_tensor[relation, head] = np.pad(tails_for_head, (0, max_num_neighbors - tails_for_head.shape[0]),
+                                                   'constant', constant_values=-1)
+
     return result_tensor
 
 
