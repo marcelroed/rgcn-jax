@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-import equinox as eqx
+import logging
+import sys
+
 import jax
-import jax.numpy as jnp
-import jax.random as jrandom
 import optax
-from einops import rearrange
 from tqdm import trange
-import jax.experimental.host_callback as hcb
+
+logging.basicConfig(filename='logs.log', encoding='utf-8', level=logging.INFO)
+logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, ComplExModel, SimplEModel, RGCNModel, \
     RGCNModelTrainingData, BasicModelData
-from rgcn.layers.decoder import DistMult
 import jax.random as jrandom
 import jax.numpy as jnp
 import equinox as eqx
 from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_batched_negative_sample_dense_rel
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
+
 
 # jax.config.update('jax_log_compiles', True)
 
@@ -79,7 +80,7 @@ def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
 @eqx.filter_value_and_grad
 def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, key):
     return model.loss(data.edge_index, data.edge_type, mask, all_data, key=key) + model.l2_loss() / (
-                2 * data.edge_index.shape[1])
+            2 * data.edge_index.shape[1])
     # 50: Filtered: MRRResults(mrr=0.5456010103225708, hits_at_10=0.8876000046730042, hits_at_3=0.708899974822998, hits_at_1=0.34860000014305115)
     # 200, oldsampling: Filtered: MRRResults(mrr=0.7419325709342957, hits_at_10=0.9191000461578369, hits_at_3=0.8622000217437744, hits_at_1=0.6100000143051147)
     # 200: 0.8109014630317688, loss=0.00489
@@ -95,7 +96,7 @@ model_configs = {
     'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
     'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
     'rgcn': RGCNModel.Config(hidden_channels=[200], normalizing_constant='per_node',
-                             dropout_rate=0.4, l2_reg=0.01, epochs=350, name='RGCN', learning_rate=0.05)
+                             dropout_rate=0.4, l2_reg=0.01, epochs=350, name='RGCN', learning_rate=0.05, seed=42)
 }
 
 
@@ -103,8 +104,6 @@ def train():
     # config = model_configs[1]
     # print('Using model', config)
 
-    seed = 42
-    model_init_key, key = jrandom.split(jrandom.PRNGKey(seed))
     dataset = LinkPredictionWrapper.load_wordnet18()
     # same settings for DistMult and RESCAL
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
@@ -112,10 +111,14 @@ def train():
 
     model_config = model_configs['rgcn']
 
-    model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
-    print(model)
+    model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
 
-    #model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
+    model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
+
+    logging.info(str(model_config))
+    logging.info(str(model))
+
+    # model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
     optimizer = optax.adam(learning_rate=model_config.learning_rate)  # ComplEx
     # model = SimplEModel(model_configs['simple'], dataset.num_nodes, dataset.num_relations, key)  # same settings for SimplE and ComplEx
     # optimizer = optax.adam(learning_rate=0.05)  # SimplE
@@ -147,7 +150,6 @@ def train():
     #    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
     get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
-
     opt_update = jax.jit(optimizer.update)
 
     try:
@@ -159,9 +161,9 @@ def train():
             # print(all_data)
             loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
             updates, opt_state = opt_update(grads, opt_state)
-            #scores = model(train_data)
-            #x = scores[train_data.edge_masks].sum()
-            #y = scores[~train_data.edge_masks].sum()
+            # scores = model(train_data)
+            # x = scores[train_data.edge_masks].sum()
+            # y = scores[~train_data.edge_masks].sum()
             # t.set_description(f'\tLoss: {loss}, Mean Test Score: {mean_test_score}')
             t.set_description(f'\tLoss: {loss}')
             t.refresh()
@@ -178,12 +180,12 @@ def train():
     head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, model, test_data,
                                                                                            test_edge_index, all_data)
 
-    print('Unfiltered:', unfiltered_results)
+    logging.info(f'Unfiltered: {unfiltered_results}')
 
     filtered_results = generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data,
                                              test_edge_index)
 
-    print('Filtered:', filtered_results)
+    logging.info(f'Filtered: {filtered_results}')
 
 
 if __name__ == '__main__':
