@@ -109,8 +109,9 @@ model_configs = {
 
 
 def train():
-    # dataset = LinkPredictionWrapper.load_fb15k_237()
-    dataset = LinkPredictionWrapper.load_wordnet18()
+    logging.info('-'*50)
+    dataset = LinkPredictionWrapper.load_fb15k_237()
+    # dataset = LinkPredictionWrapper.load_wordnet18()
 
     model_config = model_configs['rgcn']
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
@@ -124,7 +125,7 @@ def train():
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
 
-    num_epochs = model_config.epochs
+    num_epochs = model_config.epochs and 1
 
     t = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]

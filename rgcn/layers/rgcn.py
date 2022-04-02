@@ -99,7 +99,7 @@ class BlockRelLinear(eqx.Module):
 
         for block in blocks:
             brows, bcols = block.shape
-            block_matrix[i:i+brows, j:j+bcols] = block
+            block_matrix.at[i:i+brows, j:j+bcols].set(block)
             i += brows
             j += bcols
 

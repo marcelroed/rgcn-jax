@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -117,11 +118,13 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
 
 
 def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
+    batch_dim = [i for i in range(1, 500) if test_data.shape[1] % i == 0][-1]
+    logging.info(f'Using a batch_dim of {batch_dim} for generating logits')
     with time_block('Unfiltered MRR'):
         with time_block('Computing head scores'):
-            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='head')(test_data)
+            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim, mode='head')(test_data)
         with time_block('Computing tail scores'):
-            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, mode='tail')(test_data)
+            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim, mode='tail')(test_data)
     unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
