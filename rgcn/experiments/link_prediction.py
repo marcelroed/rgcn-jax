@@ -104,7 +104,7 @@ def train():
     # config = model_configs[1]
     # print('Using model', config)
 
-    dataset = LinkPredictionWrapper.load_wordnet18()
+    dataset = LinkPredictionWrapper.load_fb15k()
     # same settings for DistMult and RESCAL
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=0.5)
