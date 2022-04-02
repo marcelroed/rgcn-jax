@@ -13,6 +13,7 @@ logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, ComplExModel, SimplEModel, RGCNModel, \
     RGCNModelTrainingData, BasicModelData
+from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 import jax.random as jrandom
 import jax.numpy as jnp
 import equinox as eqx
@@ -91,11 +92,17 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, 
 
 
 model_configs = {
-    'distmult': GenericShallowModel.Config(n_channels=100, name='DistMult'),  # 600 epochs
-    'complex': ComplExModel.Config(n_channels=200, l2_reg=5e-4, name='ComplEx'),
-    'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
-    'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
-    'rgcn': RGCNModel.Config(hidden_channels=[200], normalizing_constant='per_node',
+    'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=100, l2_reg=None, name='DistMult',
+                                           epochs=600, learning_rate=0.5, seed=42),
+    'complex': ComplExModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
+                                   epochs=100, learning_rate=0.05, seed=42),
+    'simple': SimplEModel.Config(decoder_class=SimplE, n_channels=150, l2_reg=None, name='SimplE',
+                                 epochs=100, learning_rate=0.05, seed=42),
+    'rescal': GenericShallowModel.Config(decoder_class=RESCAL, n_channels=100, l2_reg=None, name='RESCAL',
+                                         epochs=200, learning_rate=0.5, seed=42),
+    'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
+                                 epochs=1000, learning_rate=0.01, seed=42),
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, epochs=250, name='RGCN',
                              learning_rate=0.05, seed=42)
 }
@@ -111,21 +118,13 @@ def train():
     # optimizer = optax.adam(learning_rate=0.5)
 
     model_config = model_configs['rgcn']
-
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
-
     model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
 
     logging.info(str(model_config))
     logging.info(str(model))
 
-    # model = ComplExModel(model_configs['complex'], dataset.num_nodes, dataset.num_relations, key)
     optimizer = optax.adam(learning_rate=model_config.learning_rate)  # ComplEx
-    # model = SimplEModel(model_configs['simple'], dataset.num_nodes, dataset.num_relations, key)  # same settings for SimplE and ComplEx
-    # optimizer = optax.adam(learning_rate=0.05)  # SimplE
-    # model = TransEModel(model_configs['transe'], dataset.num_nodes, dataset.num_relations, key)
-    # optimizer = optax.adam(learning_rate=0.01)  # TransE
-    # opt_state = optimizer.init(model)
 
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
     test_edge_type = dataset.edge_type[dataset.test_idx]
@@ -142,8 +141,6 @@ def train():
                                                             edge_index=complete_pos_edge_index, edge_type=complete_pos_edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
 
-    # model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)
-    # optimizer = optax.adam(learning_rate=1e-2)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     i = None

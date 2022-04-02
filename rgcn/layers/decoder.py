@@ -22,6 +22,10 @@ class Decoder(ABC):
         # [n_channels], [], [n_nodes, n_channels]
         pass
 
+    @abstractmethod
+    def l2_loss(self):
+        pass
+
 
 class DistMult(eqx.Module, Decoder):
     n_relations: int
@@ -201,6 +205,9 @@ class SimplE(eqx.Module, Decoder):
         o_h, o_t = tails[:, 0, :], tails[:, 1, :]
         return ((s_h * r) * o_t + o_h * (r_inv * s_t)).sum(axis=1) / 2
 
+    def l2_loss(self):
+        return jnp.sum(self.weights ** 2) + jnp.sum(self.weights_inv ** 2)
+
 
 class RESCAL(eqx.Module, Decoder):
     n_relations: int
@@ -237,6 +244,9 @@ class RESCAL(eqx.Module, Decoder):
         r = self.weights[edge_type]
         return jnp.einsum('c,cd,ed->e', head, r, tails)
 
+    def l2_loss(self):
+        return jnp.sum(self.weights ** 2)
+
 
 class TransE(eqx.Module, Decoder):
     n_relations: int
@@ -263,6 +273,9 @@ class TransE(eqx.Module, Decoder):
     def forward_tails(self, head, edge_type, tails):
         r = self.weights[edge_type]
         return -jnp.linalg.norm((head + r) - tails, axis=1, ord=1)
+
+    def l2_loss(self):
+        return jnp.sum(self.weights ** 2)
 
 
 if __name__ == '__main__':

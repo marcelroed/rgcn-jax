@@ -68,7 +68,7 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
-    def loss(self, edge_index, edge_type, mask, all_data):
+    def loss(self, edge_index, edge_type, mask, all_data, key):
         pass
 
     @abstractmethod
@@ -80,21 +80,22 @@ class GenericShallowModel(eqx.Module, BaseModel):
     @dataclass
     class Config(BaseConfig):
         n_channels: int
-        l2_reg: Optional[float] = None
-        name: Optional[str] = None
+
+        def get_model(self, n_nodes, n_relations, key):
+            return GenericShallowModel(self, n_nodes, n_relations, key)
 
     decoder: Decoder
     initializations: jnp.ndarray
     l2_reg: Optional[float]
 
-    def __init__(self, decoder, config: Config, n_nodes, n_relations, key):
+    def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
-        self.decoder = decoder(n_relations, config.n_channels, key2)
+        self.decoder = config.decoder_class(n_relations, config.n_channels, key2)
 
-    def __call__(self, edge_index, edge_type, all_data):
+    def __call__(self, edge_index, edge_type, all_data, key):
         return self.decoder(self.initializations, edge_index, edge_type)
 
     def normalize(self):  # Do not JIT
@@ -110,21 +111,26 @@ class GenericShallowModel(eqx.Module, BaseModel):
     def forward_tails(self, node_embeddings, edge_type, head):
         return self.decoder.forward_tails(node_embeddings[head], edge_type, node_embeddings)
 
-    def loss(self, edge_index, edge_type, mask, all_data):
-        scores = self(edge_index, edge_type, None)
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, None, key)
         return cross_entropy_loss(scores, mask)
 
     def l2_loss(self):
         if self.l2_reg is None:
             return jnp.array(0.)
-        return self.l2_reg * (jnp.square(self.decoder.weights).sum())
+        return self.l2_reg * self.decoder.l2_loss()
 
 
 class ComplExModel(GenericShallowModel):
-    def __init__(self, config: GenericShallowModel.Config, n_nodes, n_relations, key):
+    @dataclass
+    class Config(GenericShallowModel.Config):
+        def get_model(self, n_nodes, n_relations, key):
+            return ComplExModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        assert(config.decoder_class == ComplEx)
         key1, key2, key3 = jrandom.split(key, 3)
-        super().__init__(decoder=ComplEx, config=config,
-                         n_nodes=n_nodes, n_relations=n_relations, key=key3)
+        super().__init__(config=config, n_nodes=n_nodes, n_relations=n_relations, key=key3)
 
         # [n_nodes, 2, n_channels] -- first real, then imaginary
         self.initializations = jnp.stack(
@@ -143,10 +149,15 @@ class ComplExModel(GenericShallowModel):
 
 
 class SimplEModel(GenericShallowModel):
+    @dataclass
+    class Config(GenericShallowModel.Config):
+        def get_model(self, n_nodes, n_relations, key):
+            return SimplEModel(self, n_nodes, n_relations, key)
 
-    def __init__(self, config: GenericShallowModel.Config, n_nodes, n_relations, key):
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        assert(config.decoder_class == SimplE)
         key1, key2, key3 = jrandom.split(key, 3)
-        super().__init__(SimplE, config, n_nodes, n_relations, key3)
+        super().__init__(config, n_nodes, n_relations, key3)
 
         # [n_nodes, 2, n_channels] -- first real, then imaginary
         self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
@@ -159,8 +170,7 @@ class SimplEModel(GenericShallowModel):
         if self.l2_reg is None:
             return jnp.array(0.)
         return self.l2_reg * (
-                jnp.square(self.decoder.weights).sum() +
-                jnp.square(self.decoder.weights_inv).sum() +
+                self.decoder.l2_loss() +
                 jnp.square(self.initializations).sum()
         )
 
@@ -168,21 +178,25 @@ class SimplEModel(GenericShallowModel):
 class TransEModel(GenericShallowModel):
     @dataclass
     class Config(GenericShallowModel.Config):
-        margin: int = 2
+        margin: int
+
+        def get_model(self, n_nodes, n_relations, key):
+            return TransEModel(self, n_nodes, n_relations, key)
 
     margin: int
 
     def __init__(self, config: Config, n_nodes, n_relations, key):
-        super().__init__(TransE, config, n_nodes, n_relations, key)
+        assert(config.decoder_class == TransE)
+        super().__init__(config, n_nodes, n_relations, key)
         self.margin = config.margin
 
     def normalize(self):
         pass
 
-    def loss(self, edge_index, edge_type, mask, all_data):
+    def loss(self, edge_index, edge_type, mask, all_data, key):
         neg_start_index = edge_index.shape[1] // 2
-        scores_pos = self(edge_index[:, :neg_start_index], edge_type[:neg_start_index], all_data)
-        scores_neg = self(edge_index[:, neg_start_index:], edge_type[neg_start_index:], all_data)
+        scores_pos = self(edge_index[:, :neg_start_index], edge_type[:neg_start_index], all_data, key)
+        scores_neg = self(edge_index[:, neg_start_index:], edge_type[neg_start_index:], all_data, key)
         return margin_ranking_loss(scores_pos, scores_neg, self.margin)
 
 
@@ -208,21 +222,16 @@ class RGCNModelTrainingData:
 
 class RGCNModel(eqx.Module, BaseModel):
     rgcns: list[RGCNConv]
-    decoder: DistMult
     dropout_rate: Optional[float]
     l2_reg: Optional[float]
+    decoder: Decoder
 
     @dataclass
     class Config(BaseConfig):
         hidden_channels: list[int]
-        edge_dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
-        node_dropout_rate: Optional[float] = None  # None -> 1.0, meaning no dropout
-        normalizing_constant: Literal['per_relation_node', 'per_node', 'none'] = 'per_node'
-        l2_reg: Optional[float] = None
-        name: Optional[str] = None
-        epochs: int = 10
-        learning_rate: float = 0.5
-        seed: int = 42
+        edge_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
+        node_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
+        normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
 
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
@@ -237,7 +246,7 @@ class RGCNModel(eqx.Module, BaseModel):
                      decomposition_method='basis', normalizing_constant=config.normalizing_constant, dropout_rate=config.node_dropout_rate, n_decomp=2, key=key1)
             for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
-        self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
+        self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
         dropout_key, key = jrandom.split(key)

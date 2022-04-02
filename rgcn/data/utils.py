@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import gc
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy as np
 import torch
 import chex
+from dataclasses import dataclass
 from jax import numpy as jnp
 from tqdm import trange
 
 from rgcn.utils import memory
+from collections.abc import Callable
+from rgcn.layers.decoder import Decoder, DistMult
 
 
 def torch_to_jax(tensor):
@@ -75,22 +78,29 @@ def make_dense_relation_neighbors(edge_index, edge_type, num_nodes):
             max_num_neighbors = max(max_num_neighbors, tails_for_head.shape[0])
 
     # Construct a result array
-    result_tensor = np.zeros((n_relations, num_nodes, max_num_neighbors), dtype=int)
+    result_tensor = np.full((n_relations, num_nodes, max_num_neighbors), fill_value=-1, dtype=int)
 
     for relation in trange(n_relations, desc='Writing to array'):
         rel_edge_index = edge_index[:, edge_type == relation]
         for head in range(num_nodes):
             head_mask = rel_edge_index[0] == head
             tails_for_head = rel_edge_index[1, head_mask]
-            max_num_neighbors = max(max_num_neighbors, tails_for_head.shape[0])
-            result_tensor[relation, head] = np.pad(tails_for_head, (0, max_num_neighbors - tails_for_head.shape[0]),
-                                                   'constant', constant_values=-1)
+            result_tensor[relation, head, :tails_for_head.shape[0]] = tails_for_head
+            del head_mask
+            del tails_for_head
+        gc.collect()
 
     return result_tensor
 
 
+@dataclass
 class BaseConfig:
-    name: str
+    name: Optional[str]
+    epochs: int
+    learning_rate: float
+    l2_reg: Optional[float]
+    decoder_class: Callable[[int, int, any], Decoder]
+    seed: int
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.name})'
