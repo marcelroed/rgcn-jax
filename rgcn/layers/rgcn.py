@@ -78,9 +78,12 @@ class RGCNConv(eqx.Module):
             self_transform = jnp.matmul(x, self.self_weight)  # [num_nodes, out_channels]
 
         # Ignore the self-transform for some elements if dropout_rate is enabled
-        if self.dropout_rate:
+        if self.dropout_rate and key is not None:
             self_transform = jnp.where(
-                jrandom.bernoulli(key, self.dropout_rate, (self_transform.shape[0], 1)) * self_transform, 0)
+                jrandom.bernoulli(key, self.dropout_rate, (self_transform.shape[0], 1)),
+                self_transform / self.dropout_rate,
+                0
+            )
 
         return self_transform
 

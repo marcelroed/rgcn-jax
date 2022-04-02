@@ -240,17 +240,19 @@ class RGCNModel(eqx.Module, BaseModel):
         self.decoder = DistMult(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
-        dropout_all_data = all_data.dropout(self.dropout_rate, key)
+        dropout_key, key = jrandom.split(key)
+        dropout_all_data = all_data.dropout(self.dropout_rate, dropout_key)
         x = None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks))
+            layer_key, key = jrandom.split(key)
+            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks, layer_key))
         x = self.decoder(x, edge_index, rel)
         return x
 
     def get_node_embeddings(self, all_data):
         x = None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks))
+            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks, key=None))
         return x
 
     def normalize(self):
