@@ -21,6 +21,13 @@ class RelLinear(eqx.Module):
     def __getitem__(self, relation_index: int):
         return self.weights[relation_index]
 
+    def apply(self, rel, x):
+        return self[rel](x)
+
+    def apply_id(self, rel):
+        """Apply to identity matrix."""
+        return self[rel]
+
     def l2_loss(self):
         return jnp.sum(jnp.square(self.weights))
 
@@ -37,13 +44,74 @@ class DecomposedRelLinear(eqx.Module):
     def __getitem__(self, relation_index: int):
         return jnp.einsum('b,bio->io', self.base_weights[relation_index], self.bases)
 
+    def apply(self, rel, x):
+        return self[rel](x)
+
+    def apply_id(self, rel):
+        return self[rel]
+
     def l2_loss(self):
         return jnp.sum(jnp.square(self.bases))
 
 
+class BlockRelLinear(eqx.Module):
+    blocks: jnp.ndarray
+    remainder_block: Optional[jnp.ndarray]
+    in_features: int
+    out_features: int
+
+    def __init__(self, in_features, out_features, num_relations, num_blocks, key):
+        initializer = jax.nn.initializers.glorot_uniform()
+
+        assert out_features % num_blocks == 0, 'Block size must divide out_features'
+
+        out_block_size = out_features // num_blocks
+
+        in_features_remainder = in_features % num_blocks
+        in_block_size = in_features // num_blocks
+
+        self.in_features = in_features
+        self.out_features = out_features
+
+        if in_features_remainder != 0:
+            # If block_size doesn't divide in_features we have to make the last block
+            key1, key2 = jrandom.split(key)
+            self.blocks = initializer(key1, (num_relations, num_blocks - 1, in_block_size, out_block_size))
+            self.remainder_block = initializer(key2, (num_relations, in_block_size + in_features_remainder, out_block_size))
+        else:
+            self.remainder_block = None
+            self.blocks = initializer(key, (num_relations, num_blocks, in_block_size, out_block_size))
+
+    def apply(self, rel, x):
+        if self.remainder_block is None:
+            x_by_block = rearrange(x, 'num_points (num_blocks in_block_size) -> num_points num_blocks in_block_size', num_blocks=self.blocks.shape[1])
+            relation_blocks = self.blocks[rel]
+            transformed = jnp.einsum('nio, pni -> pno', relation_blocks, x_by_block)
+            return rearrange(transformed, 'num_points num_blocks out_block_size -> num_points (num_blocks out_block_size)')
+        else:
+            raise NotImplementedError
+
+    def apply_id(self, rel):
+        # Have to construct the block matrix
+        block_matrix = jnp.zeros((self.in_features, self.out_features))
+        blocks = self.blocks[rel] if self.remainder_block is None else list(self.blocks[rel]) + [self.remainder_block[rel]]
+        i, j = 0, 0
+
+        for block in blocks:
+            brows, bcols = block.shape
+            block_matrix[i:i+brows, j:j+bcols] = block
+            i += brows
+            j += bcols
+
+        return block_matrix
+
+    def l2_loss(self):
+        return jnp.sum(jnp.square(self.blocks))
+
+
 class RGCNConv(eqx.Module):
     self_weight: jnp.ndarray
-    relation_weights: Union[RelLinear, DecomposedRelLinear]
+    relation_weights: Union[RelLinear, DecomposedRelLinear, BlockRelLinear]
     in_channels: int
     out_channels: int
     n_relations: int
@@ -56,7 +124,6 @@ class RGCNConv(eqx.Module):
         sw_key, rel_key = jrandom.split(key)
         self.in_channels = in_channels
         self.out_channels = out_channels
-        n_relations *= 2
         self.n_relations = n_relations
         self.normalizing_constant = normalizing_constant
         self.dropout_rate = dropout_rate
@@ -67,9 +134,11 @@ class RGCNConv(eqx.Module):
         if decomposition_method == 'none':
             self.relation_weights = RelLinear(in_channels, out_channels, n_relations, rel_key)
         elif decomposition_method == 'basis':
-            self.relation_weights = DecomposedRelLinear(in_channels, out_channels, n_relations, n_decomp, rel_key)
+            self.relation_weights = DecomposedRelLinear(in_channels, out_channels,
+                                                        n_relations, num_bases=n_decomp, key=rel_key)
         elif decomposition_method == 'block':
-            raise NotImplementedError
+            self.relation_weights = BlockRelLinear(in_channels, out_channels, n_relations,
+                                                   num_blocks=n_decomp, key=rel_key)
 
     def get_self_transform(self, x: Optional[jnp.ndarray] = None, key=None):
         if x is None:
@@ -91,7 +160,7 @@ class RGCNConv(eqx.Module):
     def get_work_relation(self, x, edge_type_idcs, edge_masks):
         node_normalizing_constant = None
         if self.normalizing_constant == 'per_node':
-            num_nodes = x.shape[0] if x is not None else self.relation_weights[0].shape[0]
+            num_nodes = x.shape[0] if x is not None else self.in_channels
             flattened_edge_idcs = rearrange(edge_type_idcs, 'relations node edges -> node (relations edges)')
             flattened_edge_mask = rearrange(edge_masks, 'relations edges -> (relations edges)')
             node_normalizing_constant = jnp.zeros((num_nodes,)).at[flattened_edge_idcs[1]].add(jnp.where(flattened_edge_mask, 1, 0))
@@ -108,9 +177,9 @@ class RGCNConv(eqx.Module):
 
             if x is None:
                 # x is the identity matrix
-                out_rel = self.relation_weights[rel]
+                out_rel = self.relation_weights.apply_id(rel)
             else:
-                out_rel = jnp.matmul(x, self.relation_weights[rel])
+                out_rel = self.relation_weights.apply(rel, x)
 
             # Scatter the out_rel to the target nodes
             out_term = jnp.zeros(prev_out.shape).at[rel_edge_index[1], :].add(jnp.where(edge_mask, out_rel[rel_edge_index[0], :], 0), )

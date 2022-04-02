@@ -232,6 +232,7 @@ class RGCNModel(eqx.Module, BaseModel):
         edge_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         node_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
+        decomposition_method: Literal['basis', 'block', 'none']
 
         def get_model(self, n_nodes, n_relations, key):
             return RGCNModel(self, n_nodes, n_relations, key)
@@ -241,9 +242,13 @@ class RGCNModel(eqx.Module, BaseModel):
         key1, key2 = jrandom.split(key)
         self.dropout_rate = config.edge_dropout_rate
         self.l2_reg = config.l2_reg
+
+        # Use 2 bases or 5 blocks
+        n_decomp = 2 if config.decomposition_method == 'basis' else 100 if config.decomposition_method == 'block' else None
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=n_relations,
-                     decomposition_method='basis', normalizing_constant=config.normalizing_constant, dropout_rate=config.node_dropout_rate, n_decomp=2, key=key1)
+                     decomposition_method=config.decomposition_method, normalizing_constant=config.normalizing_constant,
+                     dropout_rate=config.node_dropout_rate, n_decomp=n_decomp, key=key1)
             for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
         ]
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key2)

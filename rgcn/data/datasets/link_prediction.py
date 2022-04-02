@@ -135,3 +135,8 @@ class LinkPredictionWrapper:
     def load_fb15k(cls, root='data/'):
         dataset = CustomDataset(f'{root}fb15k', 'FB15k')[0]
         return cls.load_dataset(dataset, 'FB15k')
+
+    @classmethod
+    def load_fb15k_237(cls, root='data/'):
+        dataset = CustomDataset(f'{root}fb15k-237', 'FB15k-237')[0]
+        return cls.load_dataset(dataset, 'FB15k-237')
