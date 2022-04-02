@@ -96,7 +96,7 @@ model_configs = {
     'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
     'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
     'rgcn': RGCNModel.Config(hidden_channels=[200], normalizing_constant='per_node',
-                             edge_dropout_rate=0.6, node_dropout_rate=0.8, l2_reg=0.01, epochs=350, name='RGCN',
+                             edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, epochs=250, name='RGCN',
                              learning_rate=0.05, seed=42)
 }
 
@@ -105,7 +105,7 @@ def train():
     # config = model_configs[1]
     # print('Using model', config)
 
-    dataset = LinkPredictionWrapper.load_fb15k()
+    dataset = LinkPredictionWrapper.load_wordnet18()
     # same settings for DistMult and RESCAL
     # model = GenericShallowModel(DistMult, model_configs['distmult'], dataset.num_nodes, dataset.num_relations, key)
     # optimizer = optax.adam(learning_rate=0.5)
@@ -136,8 +136,10 @@ def train():
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
 
-    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=dataset.num_relations,
-                                                            edge_index=pos_edge_index, edge_type=pos_edge_type)
+    complete_pos_edge_index = jnp.concatenate((pos_edge_index, jnp.flip(pos_edge_index, axis=0)), axis=1)
+    complete_pos_edge_type = jnp.concatenate((pos_edge_type, pos_edge_type + dataset.num_relations))
+    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=2 * dataset.num_relations,
+                                                            edge_index=complete_pos_edge_index, edge_type=complete_pos_edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
 
     # model = RGCNModel(model_configs['rgcn'], dataset.num_nodes, dataset.num_relations, key)

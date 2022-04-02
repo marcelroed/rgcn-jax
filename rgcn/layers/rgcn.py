@@ -56,6 +56,7 @@ class RGCNConv(eqx.Module):
         sw_key, rel_key = jrandom.split(key)
         self.in_channels = in_channels
         self.out_channels = out_channels
+        n_relations *= 2
         self.n_relations = n_relations
         self.normalizing_constant = normalizing_constant
         self.dropout_rate = dropout_rate
