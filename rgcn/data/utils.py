@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import gc
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy as np
 import torch
 import chex
+from dataclasses import dataclass
 from jax import numpy as jnp
 from tqdm import trange
 
 from rgcn.utils import memory
+from collections.abc import Callable
+from rgcn.layers.decoder import Decoder, DistMult
 
 
 def torch_to_jax(tensor):
@@ -89,8 +92,14 @@ def make_dense_relation_neighbors(edge_index, edge_type, num_nodes):
     return result_tensor
 
 
+@dataclass
 class BaseConfig:
-    name: str
+    name: Optional[str]
+    epochs: int
+    learning_rate: float
+    l2_reg: Optional[float]
+    decoder_class: Callable[[int, int, any], Decoder]
+    seed: int
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.name})'
