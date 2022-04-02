@@ -47,16 +47,18 @@ class RGCNConv(eqx.Module):
     in_channels: int
     out_channels: int
     n_relations: int
+    dropout_rate: Optional[float]
     normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
 
     def __init__(self, in_channels, out_channels, n_relations,
                  decomposition_method: Literal['none', 'basis', 'block'], n_decomp: Optional[int],
-                 normalizing_constant: Literal['per_relation_node', 'per_node', 'none'], key):
+                 normalizing_constant: Literal['per_relation_node', 'per_node', 'none'], dropout_rate: Optional[float], key):
         sw_key, rel_key = jrandom.split(key)
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.n_relations = n_relations
         self.normalizing_constant = normalizing_constant
+        self.dropout_rate = dropout_rate
         glorot_initializer = jnn.initializers.glorot_uniform()
 
         self.self_weight = glorot_initializer(sw_key, (in_channels, out_channels), jnp.float32)
@@ -68,12 +70,18 @@ class RGCNConv(eqx.Module):
         elif decomposition_method == 'block':
             raise NotImplementedError
 
-    def get_self_transform(self, x: Optional[jnp.ndarray] = None):
+    def get_self_transform(self, x: Optional[jnp.ndarray] = None, key=None):
         if x is None:
             # x is an identity matrix: [num_nodes, num_nodes] = [in_channels, in_channels]
-            self_transform = self.self_weight
+            self_transform = self.self_weight  # [num_nodes=in_channels, out_channels]
         else:
-            self_transform = jnp.matmul(x, self.self_weight)
+            self_transform = jnp.matmul(x, self.self_weight)  # [num_nodes, out_channels]
+
+        # Ignore the self-transform for some elements if dropout_rate is enabled
+        if self.dropout_rate:
+            self_transform = jnp.where(
+                jrandom.bernoulli(key, self.dropout_rate, (self_transform.shape[0], 1)) * self_transform, 0)
+
         return self_transform
 
     def get_work_relation(self, x, edge_type_idcs, edge_masks):
@@ -111,11 +119,11 @@ class RGCNConv(eqx.Module):
             return out
         return work_relation
 
-    def __call__(self, x, edge_type_idcs, edge_masks):
+    def __call__(self, x, edge_type_idcs, edge_masks, key):
         # x: [num_nodes, in_channels]
 
         # out: [num_nodes, out_channels]
-        out = self.get_self_transform(x)
+        out = self.get_self_transform(x, key)
 
         # self_transform: [num_nodes, out_channels]
 

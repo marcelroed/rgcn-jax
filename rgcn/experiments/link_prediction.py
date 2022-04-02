@@ -96,7 +96,7 @@ model_configs = {
     'simple': SimplEModel.Config(n_channels=150, name='SimplE'),
     'transe': TransEModel.Config(n_channels=50, margin=2, name='TransE'),
     'rgcn': RGCNModel.Config(hidden_channels=[200], normalizing_constant='per_node',
-                             dropout_rate=0.4, l2_reg=0.01, epochs=350, name='RGCN', learning_rate=0.05, seed=42)
+                             edge_dropout_rate=0.4, node_dropout_rate=0.2, l2_reg=0.01, epochs=350, name='RGCN', learning_rate=0.05, seed=42)
 }
 
 
