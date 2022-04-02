@@ -6,11 +6,10 @@ from jax_dataclasses import pytree_dataclass
 
 import equinox as eqx
 import jax.random as jrandom
-import jax
 import jax.numpy as jnp
 
-from rgcn.layers.decoder import Decoder, ComplEx, SimplE, TransE, DistMult
-from rgcn.layers.rgcn import RGCNConv
+from rgcn.layers.decoder import Decoder, TransE
+from rgcn.layers.encoder import DirectEncoder, RGCNEncoder
 from rgcn.data.utils import BaseConfig
 from warnings import warn
 from abc import ABC, abstractmethod
@@ -80,30 +79,32 @@ class GenericShallowModel(eqx.Module, BaseModel):
     @dataclass
     class Config(BaseConfig):
         n_channels: int
+        n_embeddings: int
+        normalization: bool
 
         def get_model(self, n_nodes, n_relations, key):
             return GenericShallowModel(self, n_nodes, n_relations, key)
 
+    encoder: DirectEncoder
     decoder: Decoder
-    initializations: jnp.ndarray
     l2_reg: Optional[float]
 
     def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
-        self.initializations = jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels))
+        self.encoder = DirectEncoder(n_nodes, config.n_channels, key1, config.n_embeddings, config.normalization)
         self.decoder = config.decoder_class(n_relations, config.n_channels, key2)
 
     def __call__(self, edge_index, edge_type, all_data, key):
-        return self.decoder(self.initializations, edge_index, edge_type)
+        embeddings = self.encoder(all_data, key)
+        return self.decoder(embeddings, edge_index, edge_type)
 
     def normalize(self):  # Do not JIT
-        object.__setattr__(self, 'initializations',
-                           self.initializations / jnp.linalg.norm(self.initializations, axis=1, keepdims=True))
+        self.encoder.normalize()
 
     def get_node_embeddings(self, all_data):
-        return self.initializations
+        return self.encoder.get_node_embeddings(all_data)
 
     def forward_heads(self, node_embeddings, edge_type, tail):
         return self.decoder.forward_heads(node_embeddings, edge_type, node_embeddings[tail])
@@ -121,60 +122,6 @@ class GenericShallowModel(eqx.Module, BaseModel):
         return self.l2_reg * self.decoder.l2_loss()
 
 
-class ComplExModel(GenericShallowModel):
-    @dataclass
-    class Config(GenericShallowModel.Config):
-        def get_model(self, n_nodes, n_relations, key):
-            return ComplExModel(self, n_nodes, n_relations, key)
-
-    def __init__(self, config: Config, n_nodes, n_relations, key):
-        assert(config.decoder_class == ComplEx)
-        key1, key2, key3 = jrandom.split(key, 3)
-        super().__init__(config=config, n_nodes=n_nodes, n_relations=n_relations, key=key3)
-
-        # [n_nodes, 2, n_channels] -- first real, then imaginary
-        self.initializations = jnp.stack(
-            (jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
-             jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))), axis=1
-        )
-
-    def normalize(self):
-        pass
-
-    def l2_loss(self):
-        if self.l2_reg is None:
-            return jnp.array(0.)
-
-        return self.l2_reg * (self.decoder.l2_loss() + jnp.square(self.initializations).sum())
-
-
-class SimplEModel(GenericShallowModel):
-    @dataclass
-    class Config(GenericShallowModel.Config):
-        def get_model(self, n_nodes, n_relations, key):
-            return SimplEModel(self, n_nodes, n_relations, key)
-
-    def __init__(self, config: Config, n_nodes, n_relations, key):
-        assert(config.decoder_class == SimplE)
-        key1, key2, key3 = jrandom.split(key, 3)
-        super().__init__(config, n_nodes, n_relations, key3)
-
-        # [n_nodes, 2, n_channels] -- first real, then imaginary
-        self.initializations = jnp.stack([jax.nn.initializers.normal()(key1, (n_nodes, config.n_channels)),
-                                          jax.nn.initializers.normal()(key2, (n_nodes, config.n_channels))], 1)
-
-    def normalize(self):
-        pass
-
-    def l2_loss(self):
-        if self.l2_reg is None:
-            return jnp.array(0.)
-        return self.l2_reg * (
-                self.decoder.l2_loss() +
-                jnp.square(self.initializations).sum()
-        )
-
-
 class TransEModel(GenericShallowModel):
     @dataclass
     class Config(GenericShallowModel.Config):
@@ -186,12 +133,9 @@ class TransEModel(GenericShallowModel):
     margin: int
 
     def __init__(self, config: Config, n_nodes, n_relations, key):
-        assert(config.decoder_class == TransE)
+        assert (config.decoder_class == TransE)
         super().__init__(config, n_nodes, n_relations, key)
         self.margin = config.margin
-
-    def normalize(self):
-        pass
 
     def loss(self, edge_index, edge_type, mask, all_data, key):
         neg_start_index = edge_index.shape[1] // 2
@@ -221,9 +165,8 @@ class RGCNModelTrainingData:
 
 
 class RGCNModel(eqx.Module, BaseModel):
-    rgcns: list[RGCNConv]
-    dropout_rate: Optional[float]
     l2_reg: Optional[float]
+    encoder: RGCNEncoder
     decoder: Decoder
 
     @dataclass
@@ -239,35 +182,18 @@ class RGCNModel(eqx.Module, BaseModel):
 
     def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
-        key1, key2 = jrandom.split(key)
-        self.dropout_rate = config.edge_dropout_rate
         self.l2_reg = config.l2_reg
-
-        # Use 2 bases or 5 blocks
-        n_decomp = 2 if config.decomposition_method == 'basis' else 100 if config.decomposition_method == 'block' else None
-        self.rgcns = [
-            RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
-                     decomposition_method=config.decomposition_method, normalizing_constant=config.normalizing_constant,
-                     dropout_rate=config.node_dropout_rate, n_decomp=n_decomp, key=key1)
-            for in_channels, out_channels in zip([n_nodes] + config.hidden_channels[:-1], config.hidden_channels)
-        ]
+        key1, key2 = jrandom.split(key)
+        self.encoder = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
+                                   config.normalizing_constant, config.decomposition_method, n_nodes, n_relations, key1)
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
-        dropout_key, key = jrandom.split(key)
-        dropout_all_data = all_data.dropout(self.dropout_rate, dropout_key)
-        x = None
-        for layer in self.rgcns:
-            layer_key, key = jrandom.split(key)
-            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks, layer_key))
-        x = self.decoder(x, edge_index, rel)
-        return x
+        embeddings = self.encoder(all_data, key)
+        return self.decoder(embeddings, edge_index, rel)
 
     def get_node_embeddings(self, all_data):
-        x = None
-        for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks, key=None))
-        return x
+        return self.encoder.get_node_embeddings(all_data)
 
     def normalize(self):
         pass

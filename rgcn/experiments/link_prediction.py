@@ -11,7 +11,7 @@ logging.basicConfig(filename='logs.log', encoding='utf-8', level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
-from rgcn.models.link_prediction import GenericShallowModel, TransEModel, ComplExModel, SimplEModel, RGCNModel, \
+from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
     RGCNModelTrainingData, BasicModelData
 from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 import jax.random as jrandom
@@ -85,14 +85,19 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, 
 
 model_configs = {
     'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=100, l2_reg=None, name='DistMult',
+                                           n_embeddings=1, normalization=True,
                                            epochs=600, learning_rate=0.5, seed=42),
-    'complex': ComplExModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
+    'complex': GenericShallowModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
+                                   n_embeddings=2, normalization=False,
                                    epochs=100, learning_rate=0.05, seed=42),
-    'simple': SimplEModel.Config(decoder_class=SimplE, n_channels=150, l2_reg=None, name='SimplE',
+    'simple': GenericShallowModel.Config(decoder_class=SimplE, n_channels=150, l2_reg=None, name='SimplE',
+                                 n_embeddings=2, normalization=False,
                                  epochs=100, learning_rate=0.05, seed=42),
     'rescal': GenericShallowModel.Config(decoder_class=RESCAL, n_channels=100, l2_reg=None, name='RESCAL',
+                                         n_embeddings=1, normalization=True,
                                          epochs=200, learning_rate=0.5, seed=42),
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
+                                 n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
     'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
