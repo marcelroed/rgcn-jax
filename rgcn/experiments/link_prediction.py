@@ -23,6 +23,7 @@ from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 
 # jax.config.update('jax_log_compiles', True)
+jax.config.update('jax_platform_name', 'cpu')
 
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
@@ -109,6 +110,7 @@ def train():
     logging.info('-'*50)
     dataset = LinkPredictionWrapper.load_fb15k_237()
     # dataset = LinkPredictionWrapper.load_wordnet18()
+    logging.info(dataset.name)
 
     model_config = model_configs['rgcn']
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))

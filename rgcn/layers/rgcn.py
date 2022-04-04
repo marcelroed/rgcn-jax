@@ -84,9 +84,13 @@ class BlockRelLinear(eqx.Module):
 
     def apply(self, rel, x):
         if self.remainder_block is None:
+            # x: [num_points, in_features] -> [num_points, num_blocks, in_block_size]
             x_by_block = rearrange(x, 'num_points (num_blocks in_block_size) -> num_points num_blocks in_block_size', num_blocks=self.blocks.shape[1])
             relation_blocks = self.blocks[rel]
             transformed = jnp.einsum('nio, pni -> pno', relation_blocks, x_by_block)
+            # [1, 2, 3, 4, 5, 6]
+            # [[1, 2], [3, 4], [5, 6]] -> [[0, 1, 2], [1, 2, 3], [2, 3, 4]]
+            # [0, 1, 2, 1, 2, 3, 2, 3, 4]
             return rearrange(transformed, 'num_points num_blocks out_block_size -> num_points (num_blocks out_block_size)')
         else:
             raise NotImplementedError
@@ -95,18 +99,19 @@ class BlockRelLinear(eqx.Module):
         # Have to construct the block matrix
         block_matrix = jnp.zeros((self.in_features, self.out_features))
         blocks = self.blocks[rel] if self.remainder_block is None else list(self.blocks[rel]) + [self.remainder_block[rel]]
-        i, j = 0, 0
 
+        i, j = 0, 0
         for block in blocks:
             brows, bcols = block.shape
-            block_matrix.at[i:i+brows, j:j+bcols].set(block)
+            block_matrix = block_matrix.at[i:i+brows, j:j+bcols].set(block)
             i += brows
             j += bcols
 
         return block_matrix
 
     def l2_loss(self):
-        return jnp.sum(jnp.square(self.blocks))
+        return jnp.sum(jnp.square(self.blocks)) +\
+               (jnp.sum(jnp.square(self.remainder_block)) if self.remainder_block is not None else 0)
 
 
 class RGCNConv(eqx.Module):
@@ -258,3 +263,9 @@ def test_rgcn_train():
     # @jax.jit
     # @jax.grad
     # def loss_fn():
+
+def test_rgcnconv_block_decomp():
+    rgcn = RGCNConv(3, 2, 2, decomposition_method='block', n_decomp=1, normalizing_constant='per_node', dropout_rate=None, key=jrandom.PRNGKey(0))
+    relation_edge_idcs = jnp.array([[[0, 1, 2], [1, 2, 0]], [[1, 2, -1], [2, 0, -1]]])
+    result = rgcn(None, relation_edge_idcs, jnp.min(relation_edge_idcs, axis=1) == -1, key=jrandom.PRNGKey(0))
+    print(result)
