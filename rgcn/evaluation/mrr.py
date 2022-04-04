@@ -69,16 +69,16 @@ def test_generate_mrr2():
 @dataclass
 class MRRResults:
     mrr: float
-    hits_at_10: float
-    hits_at_3: float
     hits_at_1: float
+    hits_at_3: float
+    hits_at_10: float
 
     def average_with(self, other: MRRResults):
         return MRRResults(
             mrr=(self.mrr + other.mrr) / 2,
-            hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2,
+            hits_at_1=(self.hits_at_1 + other.hits_at_1) / 2,
             hits_at_3=(self.hits_at_3 + other.hits_at_3) / 2,
-            hits_at_1=(self.hits_at_1 + other.hits_at_1) / 2
+            hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2
         )
 
     @classmethod
@@ -114,7 +114,7 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
     hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
     # Get the hits@1 of the true edges
     hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
-    return MRRResults(mrr, hits10, hits3, hits1)
+    return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
 
 
 def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
@@ -122,9 +122,11 @@ def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data
     logging.info(f'Using a batch_dim of {batch_dim} for generating logits')
     with time_block('Unfiltered MRR'):
         with time_block('Computing head scores'):
-            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim, mode='head')(test_data)
+            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim,
+                                                       mode='head')(test_data)
         with time_block('Computing tail scores'):
-            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim, mode='tail')(test_data)
+            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim,
+                                                       mode='tail')(test_data)
     unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
