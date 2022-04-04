@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Optional, Literal, Union
+from typing import Optional, Union
+from typing_extensions import Literal
 
 import jax
 import optax
@@ -172,7 +173,7 @@ class RGCNModel(eqx.Module, BaseModel):
 
     @dataclass
     class Config(BaseConfig):
-        hidden_channels: list[int]
+        hidden_channels: any
         edge_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         node_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         normalizing_constant: Literal['per_relation_node', 'per_node', 'none']

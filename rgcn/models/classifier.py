@@ -1,4 +1,5 @@
-from typing import Optional, Literal
+from typing import Optional
+from typing_extensions import Literal
 
 from rgcn.layers.rgcn import RGCNConv
 import equinox as eqx
@@ -12,7 +13,7 @@ class RGCNClassifier(eqx.Module):
     n_relations: int
     hidden_channels: int
     n_classes: int
-    layers: list[RGCNConv]
+    layers: any
     l2_reg: Optional[float]
 
     def __init__(self, n_nodes, n_relations, hidden_channels, n_classes,

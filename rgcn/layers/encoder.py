@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Optional
+from typing import Optional
+from typing_extensions import Literal
 
 import equinox as eqx
 from jax import random as jrandom
@@ -54,11 +55,11 @@ class DirectEncoder(eqx.Module, Encoder):
 
 
 class RGCNEncoder(eqx.Module, Encoder):
-    rgcns: list[RGCNConv]
+    rgcns: any
     dropout_rate: Optional[float]
     pre_transform: Optional[jnp.ndarray]  # Initializations for x instead of a one-hot matrix
 
-    def __init__(self, hidden_channels: list[int], edge_dropout_rate: float, node_dropout_rate: float,
+    def __init__(self, hidden_channels, edge_dropout_rate: float, node_dropout_rate: float,
                  normalizing_constant: Literal['per_relation_node', 'per_node', 'none'],
                  decomposition_method: Literal['basis', 'block', 'none'], n_nodes: int, n_relations: int, key):
         super().__init__()

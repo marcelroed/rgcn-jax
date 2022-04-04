@@ -1,5 +1,5 @@
-from functools import partial
-from typing import Literal, Union, Optional
+from typing import Union, Optional
+from typing_extensions import Literal
 
 import jax
 import jax.nn as jnn
