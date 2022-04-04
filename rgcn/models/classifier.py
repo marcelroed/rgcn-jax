@@ -25,15 +25,20 @@ class RGCNClassifier(eqx.Module):
         self.l2_reg = l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.layers = [
-            RGCNConv(n_nodes, hidden_channels, n_relations, decomposition_method, n_decomp, key1),
-            RGCNConv(hidden_channels, n_classes, n_relations, decomposition_method, n_decomp, key2),
+            RGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations,
+                     decomposition_method=decomposition_method, normalizing_constant='none',
+                     dropout_rate=None, n_decomp=n_decomp, key=key1),
+            RGCNConv(in_channels=hidden_channels, out_channels=n_classes, n_relations=n_relations,
+                     decomposition_method=decomposition_method, normalizing_constant='none',
+                     dropout_rate=None, n_decomp=n_decomp, key=key2),
         ]
 
     @eqx.filter_jit
     def __call__(self, x, edge_type_idcs, edge_masks):
+
         for layer in self.layers[:-1]:
-            x = jax.nn.relu(layer(x, edge_type_idcs, edge_masks))
-        x = self.layers[-1](x, edge_type_idcs, edge_masks)
+            x = jax.nn.relu(layer(x, edge_type_idcs, edge_masks, key=None))
+        x = self.layers[-1](x, edge_type_idcs, edge_masks, key=None)
         return x
 
     def l2_loss(self):

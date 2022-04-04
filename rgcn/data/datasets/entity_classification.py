@@ -38,7 +38,7 @@ class EntityClassificationWrapper:
         val_idx, test_idx = jnp.split(test_idx_original, [len(test_idx_original) // 5])
         val_y, test_y = jnp.split(test_y_original, [len(test_y_original) // 5])
 
-        np_masks, np_padded = make_dense_relation_tensor(dataset, edge_index, edge_type)
+        np_padded, np_masks = make_dense_relation_tensor(dataset.num_relations, edge_index, edge_type)
 
         instance = cls(
             name=dataset_name,

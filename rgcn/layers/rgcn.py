@@ -22,7 +22,7 @@ class RelLinear(eqx.Module):
         return self.weights[relation_index]
 
     def apply(self, rel, x):
-        return self[rel](x)
+        return jnp.matmul(x, self[rel])
 
     def apply_id(self, rel):
         """Apply to identity matrix."""

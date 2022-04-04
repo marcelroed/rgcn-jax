@@ -92,7 +92,8 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
     y = dataset.train_y
     edge_type_idcs = dataset.edge_index_by_type
 
-    opt_state = optimizer.init(model)
+    # opt_state = optimizer.init(model)
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     pbar = trange(epochs)
     losses, test_losses, test_accs = [], [], []
