@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 
+import jax
 import optax
 from jax_dataclasses import pytree_dataclass
 
@@ -8,8 +9,8 @@ import equinox as eqx
 import jax.random as jrandom
 import jax.numpy as jnp
 
-from rgcn.layers.decoder import Decoder, TransE
-from rgcn.layers.encoder import DirectEncoder, RGCNEncoder
+from rgcn.layers.decoder import Decoder, TransE, SimplE, ComplEx
+from rgcn.layers.encoder import DirectEncoder, RGCNEncoder, Encoder
 from rgcn.data.utils import BaseConfig
 from warnings import warn
 from abc import ABC, abstractmethod
@@ -238,3 +239,198 @@ def test_rgcn_model():
     model = RGCNModel(n_nodes, n_relations, n_channels, key)
     x = model(data)
     print(x)
+
+
+class CombinedModel(eqx.Module, BaseModel):
+    l2_reg: Optional[float]
+    encoder: RGCNEncoder
+    decoder: Union[SimplE, ComplEx]
+
+    @dataclass
+    class Config(RGCNModel.Config):
+        def get_model(self, n_nodes, n_relations, key):
+            return CombinedModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__()
+        self.l2_reg = config.l2_reg
+        key1, key2 = jrandom.split(key)
+        self.encoder = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
+                                   config.normalizing_constant, config.decomposition_method, n_nodes, n_relations, key1)
+        last_layer_channels = config.hidden_channels[-1]
+        assert (last_layer_channels % 2 == 0)
+        assert (config.decoder_class in [SimplE, ComplEx])
+        self.decoder = config.decoder_class(n_relations, last_layer_channels // 2, key2)
+
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        embeddings = self.encoder(all_data, key)  # [n_nodes, num_channels]
+        num_channels = embeddings.shape[1]
+        combined = jnp.stack(
+            (embeddings[:, :num_channels // 2],
+             embeddings[:, num_channels // 2:]),
+            axis=1
+        )
+        return self.decoder(combined, edge_index, rel)
+
+    def get_node_embeddings(self, all_data):
+        embeddings = self.encoder.get_node_embeddings(all_data)
+        num_channels = embeddings.shape[1]
+        combined = jnp.stack(
+            (embeddings[:, :num_channels // 2],
+             embeddings[:, num_channels // 2:]),
+            axis=1
+        )
+        return combined
+
+    def normalize(self):
+        pass
+
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        return self.decoder.forward_heads(node_embeddings, relation_type, node_embeddings[tail])
+
+    def forward_tails(self, node_embeddings, relation_type, head):
+        return self.decoder.forward_tails(node_embeddings[head], relation_type, node_embeddings)
+
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, all_data, key=key)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        if self.l2_reg:
+            # Don't regularize the weights in the RGCN
+            return self.l2_reg * self.decoder.l2_loss()
+        else:
+            return jnp.array(0.)
+
+
+class DoubleRGCNModel(eqx.Module, BaseModel):
+    l2_reg: Optional[float]
+    encoder1: RGCNEncoder
+    encoder2: RGCNEncoder
+    decoder: Union[SimplE, ComplEx]
+
+    @dataclass
+    class Config(RGCNModel.Config):
+        def get_model(self, n_nodes, n_relations, key):
+            return DoubleRGCNModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__()
+        self.l2_reg = config.l2_reg
+        key1, key2, key3 = jrandom.split(key, 3)
+        self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
+                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    key1)
+        self.encoder2 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
+                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    key2)
+        assert (config.decoder_class in [SimplE, ComplEx])
+        self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key3)
+
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        key1, key2 = jrandom.split(key, 2)
+        embeddings1 = self.encoder1(all_data, key1)
+        embeddings2 = self.encoder2(all_data, key2)
+        combined = jnp.stack([embeddings1, embeddings2], axis=1)
+        return self.decoder(combined, edge_index, rel)
+
+    def get_node_embeddings(self, all_data):
+        embeddings1 = self.encoder1.get_node_embeddings(all_data)
+        embeddings2 = self.encoder2.get_node_embeddings(all_data)
+        combined = jnp.stack([embeddings1, embeddings2], axis=1)
+        return combined
+
+    def normalize(self):
+        pass
+
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        return self.decoder.forward_heads(node_embeddings, relation_type, node_embeddings[tail])
+
+    def forward_tails(self, node_embeddings, relation_type, head):
+        return self.decoder.forward_tails(node_embeddings[head], relation_type, node_embeddings)
+
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, all_data, key=key)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        if self.l2_reg:
+            # Don't regularize the weights in the RGCN
+            return self.l2_reg * self.decoder.l2_loss()
+        else:
+            return jnp.array(0.)
+
+
+class LearnedEnsembleModel(eqx.Module, BaseModel):
+    l2_reg: Optional[float]
+    encoder1: Encoder
+    encoder2: Encoder
+    decoder1: Decoder
+    decoder2: Decoder
+    alpha: jnp.array
+
+    @dataclass
+    class Config(RGCNModel.Config, GenericShallowModel.Config):
+        def get_model(self, n_nodes, n_relations, key):
+            return LearnedEnsembleModel(self, n_nodes, n_relations, key)
+
+    def __init__(self, config: Config, n_nodes, n_relations, key):
+        super().__init__()
+        self.l2_reg = config.l2_reg
+        key1, key2, key3, key4 = jrandom.split(key, 4)
+        self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
+                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    key1)
+        self.encoder2 = DirectEncoder(n_nodes, config.n_channels, key2, config.n_embeddings, config.normalization)
+        self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1] // 2, key3)
+        self.decoder2 = config.decoder_class(n_relations, config.n_channels, key4)
+        self.alpha = jnp.array(0.5)
+
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        key1, key2 = jrandom.split(key)
+        embeddings1 = self.encoder1(all_data, key1)
+        num_channels = embeddings1.shape[1]
+        combined = jnp.stack(
+            (embeddings1[:, :num_channels // 2],
+             embeddings1[:, num_channels // 2:]),
+            axis=1
+        )
+        embeddings2 = self.encoder2(all_data, key2)
+        scores1 = self.decoder1(combined, edge_index, rel)
+        scores2 = self.decoder2(embeddings2, edge_index, rel)
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def get_node_embeddings(self, all_data):
+        embeddings1 = self.encoder1.get_node_embeddings(all_data)
+        num_channels = embeddings1.shape[1]
+        combined = jnp.stack(
+            (embeddings1[:, :num_channels // 2],
+             embeddings1[:, num_channels // 2:]),
+            axis=1
+        )
+        embeddings2 = self.encoder2.get_node_embeddings(all_data)
+        return jnp.stack([combined, embeddings2], axis=0)
+
+    def normalize(self):
+        self.encoder2.normalize()
+
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        scores1 = self.decoder1.forward_heads(node_embeddings[0, ...], relation_type, node_embeddings[0, tail, ...])
+        scores2 = self.decoder2.forward_heads(node_embeddings[1, ...], relation_type, node_embeddings[1, tail, ...])
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def forward_tails(self, node_embeddings, relation_type, head):
+        scores1 = self.decoder1.forward_tails(node_embeddings[0, head, ...], relation_type, node_embeddings[0, ...])
+        scores2 = self.decoder2.forward_tails(node_embeddings[1, head, ...], relation_type, node_embeddings[1, ...])
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, all_data, key=key)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        if self.l2_reg:
+            # Don't regularize the weights in the RGCN
+            return self.l2_reg * (self.decoder1.l2_loss() + self.decoder2.l2_loss())
+        else:
+            return jnp.array(0.)

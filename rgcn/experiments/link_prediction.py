@@ -14,7 +14,7 @@ logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
-    RGCNModelTrainingData, BasicModelData
+    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel
 from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 import jax.random as jrandom
 import jax.numpy as jnp
@@ -90,11 +90,11 @@ model_configs = {
                                            n_embeddings=1, normalization=True,
                                            epochs=600, learning_rate=0.5, seed=42),
     'complex': GenericShallowModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
-                                   n_embeddings=2, normalization=False,
-                                   epochs=100, learning_rate=0.05, seed=42),
+                                          n_embeddings=2, normalization=False,
+                                          epochs=100, learning_rate=0.05, seed=42),
     'simple': GenericShallowModel.Config(decoder_class=SimplE, n_channels=150, l2_reg=None, name='SimplE',
-                                 n_embeddings=2, normalization=False,
-                                 epochs=100, learning_rate=0.05, seed=42),
+                                         n_embeddings=2, normalization=False,
+                                         epochs=100, learning_rate=0.05, seed=42),
     'rescal': GenericShallowModel.Config(decoder_class=RESCAL, n_channels=100, l2_reg=None, name='RESCAL',
                                          n_embeddings=1, normalization=True,
                                          epochs=200, learning_rate=0.5, seed=42),
@@ -103,7 +103,27 @@ model_configs = {
                                  epochs=1000, learning_rate=0.01, seed=42),
     'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=250, learning_rate=0.05, seed=42, decomposition_method='block')
+                             epochs=250, learning_rate=0.05, seed=42, decomposition_method='block'),
+    'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
+                                     edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
+                                     epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis'),
+    'doublergcn': DoubleRGCNModel.Config(decoder_class=SimplE, hidden_channels=[150], normalizing_constant='per_node',
+                                         edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None, name='DoubleRGCN',
+                                         epochs=250, learning_rate=0.05, seed=42, decomposition_method='basis'),
+    'learnedensemble': LearnedEnsembleModel.Config(decoder_class=DistMult, hidden_channels=[200],
+                                                   normalizing_constant='per_node',
+                                                   edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
+                                                   name='Ensemble',
+                                                   epochs=600, learning_rate=0.05, seed=42,
+                                                   decomposition_method='basis',
+                                                   n_channels=200, n_embeddings=1, normalization=False),
+    'simpleensemble': LearnedEnsembleModel.Config(decoder_class=SimplE, hidden_channels=[300],
+                                                  normalizing_constant='per_node',
+                                                  edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
+                                                  name='SimplEnsemble',
+                                                  epochs=600, learning_rate=0.05, seed=42,
+                                                  decomposition_method='basis',
+                                                  n_channels=150, n_embeddings=2, normalization=False)
 }
 
 
@@ -148,6 +168,7 @@ def train():
 
     opt_update = jax.jit(optimizer.update)
 
+    loss = None
     i = None
     try:
         for i in pbar:
@@ -160,12 +181,18 @@ def train():
             pbar.set_description(f'\tLoss: {loss}')
             pbar.refresh()
             model = eqx.apply_updates(model, updates)
+            if hasattr(model, 'alpha'):
+                object.__setattr__(model, 'alpha', jnp.clip(model.alpha, 0, 1))
     except KeyboardInterrupt:
         print(f'Interrupted training at epoch {i}')
+
+    logging.info(f'Final loss: {loss}')
 
     # Generate MRR results
 
     model.normalize()
+    if hasattr(model, 'alpha'):
+        logging.info(f'Alpha: {model.alpha}')
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
 
