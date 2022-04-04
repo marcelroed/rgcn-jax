@@ -4,6 +4,8 @@ import logging
 import sys
 
 import jax
+jax.config.update('jax_platform_name', 'cpu')
+
 import optax
 from tqdm import trange
 
@@ -22,8 +24,7 @@ from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 
-# jax.config.update('jax_log_compiles', True)
-jax.config.update('jax_platform_name', 'cpu')
+jax.config.update('jax_log_compiles', True)
 
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}

@@ -56,6 +56,7 @@ class DirectEncoder(eqx.Module, Encoder):
 class RGCNEncoder(eqx.Module, Encoder):
     rgcns: list[RGCNConv]
     dropout_rate: Optional[float]
+    pre_transform: Optional[jnp.ndarray]  # Initializations for x instead of a one-hot matrix
 
     def __init__(self, hidden_channels: list[int], edge_dropout_rate: float, node_dropout_rate: float,
                  normalizing_constant: Literal['per_relation_node', 'per_node', 'none'],
@@ -70,13 +71,20 @@ class RGCNEncoder(eqx.Module, Encoder):
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
                      decomposition_method=decomposition_method, normalizing_constant=normalizing_constant,
                      dropout_rate=node_dropout_rate, n_decomp=n_decomp, key=key1)
-            for in_channels, out_channels in zip([n_nodes] + hidden_channels[:-1], hidden_channels)
+            for in_channels, out_channels in zip([500] + hidden_channels[:-1], hidden_channels)
         ]
+
+        if decomposition_method == 'block':
+            self.pre_transform = jax.nn.initializers.normal()(key2, (n_nodes, 500))
+        else:
+            self.pre_transform = None
 
     def __call__(self, all_data, key):
         dropout_key, key = jrandom.split(key)
         dropout_all_data = all_data.dropout(self.dropout_rate, dropout_key)
-        x = None
+
+        x = self.pre_transform  # May be None
+
         for layer in self.rgcns:
             layer_key, key = jrandom.split(key)
             x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks, layer_key))
