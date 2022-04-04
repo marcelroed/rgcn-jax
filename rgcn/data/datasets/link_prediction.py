@@ -5,7 +5,7 @@ import torch
 from attrs import define
 import jax.numpy as jnp
 from torch_geometric.data import InMemoryDataset, download_url, Data
-from torch_geometric.datasets import WordNet18
+from torch_geometric.datasets import WordNet18, WordNet18RR
 from rgcn.data.utils import torch_to_jax
 from jax_dataclasses import pytree_dataclass
 
@@ -130,6 +130,11 @@ class LinkPredictionWrapper:
     def load_wordnet18(cls, root='data/'):
         dataset = WordNet18(f'{root}wordnet18')[0]
         return cls.load_dataset(dataset, 'WN18')
+
+    @classmethod
+    def load_wordnet18rr(cls, root='data/'):
+        dataset = WordNet18RR(f'{root}wordnet18rr')[0]
+        return cls.load_dataset(dataset, 'WN18RR')
 
     @classmethod
     def load_fb15k(cls, root='data/'):
