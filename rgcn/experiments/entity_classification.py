@@ -1,23 +1,25 @@
-import json
+import logging
 import pickle
-from functools import partial
+import sys
+from statistics import mean
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as random
-import numpy as np
-from tqdm import trange
 import matplotlib.pyplot as plt
-from statistics import mean
-
-from rgcn.models.classifier import RGCNClassifier
+import numpy as np
 import optax
+from tqdm import trange
 
 from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
+from rgcn.models.classifier import RGCNClassifier
 
 # Set jax device to CPU
-jax.config.update("jax_platform_name", "cpu")
+# jax.config.update("jax_platform_name", "cpu")
+
+logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
+logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
 def make_model(dataset, seed):
@@ -44,8 +46,10 @@ def make_model(dataset, seed):
     else:
         raise ValueError(f'Unknown dataset: {dataset.name}')
 
-    classifier = RGCNClassifier(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, hidden_channels=hidden_channels,
-                                n_classes=dataset.num_classes, decomposition_method=decomposition_method, n_decomp=n_decomp, l2_reg=l2_reg, key=random.PRNGKey(seed))
+    classifier = RGCNClassifier(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
+                                hidden_channels=hidden_channels,
+                                n_classes=dataset.num_classes, decomposition_method=decomposition_method,
+                                n_decomp=n_decomp, l2_reg=l2_reg, key=random.PRNGKey(seed))
     optimizer = optax.adam(learning_rate=1e-2)
 
     return classifier, optimizer
@@ -105,8 +109,10 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
         for _ in pbar:
             loss, grads = loss_fn(model, x, edge_type_idcs, dataset.edge_masks_by_type, y_idx, y)
             updates, opt_state = optimizer.update(grads, opt_state)
-            val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.val_idx, dataset.val_y)
-            losses.append(loss), test_losses.append(val_loss); test_accs.append(val_acc)
+            val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.val_idx,
+                                             dataset.val_y)
+            losses.append(loss), test_losses.append(val_loss);
+            test_accs.append(val_acc)
             model = eqx.apply_updates(model, updates)
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
@@ -117,13 +123,15 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
         raise KeyboardInterrupt()
         pass
 
-    test_loss, test_acc = test_results(best_model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.test_idx, dataset.test_y)
-    print(test_acc)
+    test_loss, test_acc = test_results(best_model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.test_idx,
+                                       dataset.test_y)
+    logging.info('Test loss: %.4f, test accuracy: %.4f', test_loss, test_acc)
 
     return model, losses, test_losses, test_accs, test_acc
 
 
 def run_experiment(dataset, seed):
+    logging.info('Training seed: %d', seed)
     model, optimizer = make_model(dataset, seed)
 
     trained_model, losses, val_losses, val_accs, test_acc = train_model(model, optimizer, dataset)
@@ -151,7 +159,7 @@ def run_experiment(dataset, seed):
 
 
 if __name__ == '__main__':
-    dataset = EntityClassificationWrapper.load_dataset('AIFB')
+    dataset = EntityClassificationWrapper.load_dataset('AM')
     results = []
     try:
         for i in trange(2, desc='Running models with different seeds'):
@@ -160,8 +168,9 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print('Training cancelled by KeyboardInterrupt')
 
-    results = {k: [results[i][k].tolist() if isinstance(results[i][k], jnp.ndarray) else results[i][k] for i in range(len(results))] for k in results[0].keys()}
-    print(f"Mean: {mean(results['test_acc'])}")
+    results = {k: [results[i][k].tolist() if isinstance(results[i][k], jnp.ndarray) else results[i][k] for i in
+                   range(len(results))] for k in results[0].keys()}
+    logging.info(f'Mean of test accuracies {mean(results["test_acc"])}')
 
     with open(f'{dataset.name.lower()}_results.pkl', 'wb') as f:
         pickle.dump(results, f)
