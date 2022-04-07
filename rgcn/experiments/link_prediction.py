@@ -78,6 +78,7 @@ def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
 
     return perform
 
+
 def save_model(model, model_config):
     flattened_model = jax.tree_util.tree_flatten(model)
     with open(f'{model_config.name}_model', 'wb') as f:
@@ -136,15 +137,17 @@ model_configs = {
 def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast):
     @eqx.filter_jit
     def train_step(*, model, opt_state, key):
-        data_key, model_key, key = jrandom.split(key, 3)
+        data_key, model_key = jrandom.split(key)
         train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
 
         loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
         updates, opt_state = optimizer.update(grads, opt_state)
 
         model = eqx.apply_updates(model, updates)
-        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes, model, val_data, all_data)
+        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes=num_nodes, model=model, test_data=val_data,
+                                                        all_data=all_data)
         return model, opt_state, loss, val_mrr_results.mrr
+
     return train_step
 
 
@@ -200,9 +203,10 @@ def train():
 
     try:
         for i in pbar:
-            model, opt_state, loss, val_mrr = train_step(model=model, opt_state=opt_state, key=key)
+            train_key, key = jrandom.split(key)
+            model, opt_state, loss, val_mrr = train_step(model=model, opt_state=opt_state, key=train_key)
 
-            if val_mrr > best_val_mrr or True:
+            if val_mrr > best_val_mrr:
                 logging.info(f'New best model found at epoch {i} with val_mrr {val_mrr}')
                 best_val_mrr = val_mrr
                 best_model = model
@@ -213,7 +217,6 @@ def train():
                 object.__setattr__(model, 'alpha', jnp.clip(model.alpha, 0, 1))
     except KeyboardInterrupt:
         print(f'Interrupted training at epoch {i}')
-
 
     model = best_model
 
@@ -234,7 +237,9 @@ def train():
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
 
-    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset.num_nodes, model, test_data, all_data, force_cpu=True)
+    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset.num_nodes, model,
+                                                                                           test_data, all_data,
+                                                                                           force_cpu=True)
 
     logging.info(f'Unfiltered: {unfiltered_results}')
 
@@ -243,9 +248,10 @@ def train():
 
     logging.info(f'Filtered: {filtered_results}')
 
+
 def test_ensemble():
-    logging.info('-'*50)
-    #dataset = LinkPredictionWrapper.load_fb15k_237()
+    logging.info('-' * 50)
+    # dataset = LinkPredictionWrapper.load_fb15k_237()
     dataset = LinkPredictionWrapper.load_wordnet18()
     logging.info(dataset.name)
 
@@ -257,24 +263,24 @@ def test_ensemble():
         rgcn_load_model = pickle.load(f)
         rgcn_load_model = jax.tree_map(jnp.array, rgcn_load_model, is_leaf=lambda x: isinstance(x, np.ndarray))
 
-
     distmult_config = model_configs['distmult']
     rgcn_config = model_configs['rgcn']
 
     model_init_key, key = jrandom.split(jrandom.PRNGKey(distmult_config.seed), 2)
-    distmult_model = distmult_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
+    distmult_model = distmult_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
+                                               key=model_init_key)
     distmult_treedef = jax.tree_util.tree_flatten(distmult_model)[1]
     distmult_model = jax.tree_util.tree_unflatten(distmult_treedef, distmult_load_model)
 
     model_init_key, key = jrandom.split(jrandom.PRNGKey(rgcn_config.seed), 2)
     rgcn_model = rgcn_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
-                                                     key=model_init_key)
+                                       key=model_init_key)
     rgcn_treedef = jax.tree_util.tree_flatten(rgcn_model)[1]
     rgcn_model = jax.tree_util.tree_unflatten(rgcn_treedef, rgcn_load_model)
 
     ensemble_model = EnsembleModel(distmult_model, rgcn_model, key)
 
-    #logging.info(str(distmult_config))
+    # logging.info(str(distmult_config))
     logging.info(str(ensemble_model))
 
     test_edge_index = dataset.edge_index[:, dataset.test_idx]
@@ -293,7 +299,8 @@ def test_ensemble():
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
 
-    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, ensemble_model, test_data,
+    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, ensemble_model,
+                                                                                           test_data,
                                                                                            test_edge_index, all_data)
 
     logging.info(f'Unfiltered: {unfiltered_results}')
@@ -302,6 +309,7 @@ def test_ensemble():
                                              test_edge_index)
 
     logging.info(f'Filtered: {filtered_results}')
+
 
 if __name__ == '__main__':
     train()
