@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import sys
+import pickle
 
 import jax
+import numpy as np
 
 import optax
 from tqdm import trange
@@ -13,7 +15,7 @@ logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
-    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel
+    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel, EnsembleModel
 from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 import jax.random as jrandom
 import jax.numpy as jnp
@@ -75,6 +77,11 @@ def make_get_epoch_train_data_dense(pos_edge_index, pos_edge_type, num_nodes):
 
     return perform
 
+def save_model(model, model_config):
+    flattened_model = jax.tree_util.tree_flatten(model)
+    with open(f'{model_config.name}_model', 'wb') as f:
+        pickle.dump(flattened_model[0], f)
+
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
@@ -86,7 +93,7 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, 
 model_configs = {
     'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=100, l2_reg=None, name='DistMult',
                                            n_embeddings=1, normalization=True,
-                                           epochs=600, learning_rate=0.5, seed=42),
+                                           epochs=100, learning_rate=0.5, seed=42),
     'complex': GenericShallowModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
                                           n_embeddings=2, normalization=False,
                                           epochs=100, learning_rate=0.05, seed=42),
@@ -101,7 +108,7 @@ model_configs = {
                                  epochs=1000, learning_rate=0.01, seed=42),
     'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=500, learning_rate=0.05, seed=42, decomposition_method='block'),
+                             epochs=10, learning_rate=0.05, seed=42, decomposition_method='basis'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis'),
@@ -111,7 +118,7 @@ model_configs = {
     'learnedensemble': LearnedEnsembleModel.Config(decoder_class=DistMult, hidden_channels=[200],
                                                    normalizing_constant='per_node',
                                                    edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
-                                                   name='Ensemble',
+                                                   name='LearnedEnsemble',
                                                    epochs=600, learning_rate=0.05, seed=42,
                                                    decomposition_method='basis',
                                                    n_channels=200, n_embeddings=1, normalization=False),
@@ -139,8 +146,8 @@ def train_step(*, model, all_data, optimizer, opt_state, key, get_train_epoch_da
 
 def train():
     logging.info('-' * 50)
-    dataset = LinkPredictionWrapper.load_fb15k_237()
-    # dataset = LinkPredictionWrapper.load_wordnet18()
+    # dataset = LinkPredictionWrapper.load_fb15k_237()
+    dataset = LinkPredictionWrapper.load_wordnet18()
     logging.info(dataset.name)
 
     model_config = model_configs['rgcn']
@@ -200,8 +207,10 @@ def train():
     # Generate MRR results
 
     model.normalize()
+
     if hasattr(model, 'alpha'):
         logging.info(f'Alpha: {model.alpha}')
+
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
 
@@ -215,6 +224,65 @@ def train():
 
     logging.info(f'Filtered: {filtered_results}')
 
+def test_ensemble():
+    logging.info('-'*50)
+    #dataset = LinkPredictionWrapper.load_fb15k_237()
+    dataset = LinkPredictionWrapper.load_wordnet18()
+    logging.info(dataset.name)
+
+    with open(f'DistMult_model', 'rb') as f:
+        distmult_load_model = pickle.load(f)
+        distmult_load_model = jax.tree_map(jnp.array, distmult_load_model, is_leaf=lambda x: isinstance(x, np.ndarray))
+
+    with open(f'RGCN_model', 'rb') as f:
+        rgcn_load_model = pickle.load(f)
+        rgcn_load_model = jax.tree_map(jnp.array, rgcn_load_model, is_leaf=lambda x: isinstance(x, np.ndarray))
+
+
+    distmult_config = model_configs['distmult']
+    rgcn_config = model_configs['rgcn']
+
+    model_init_key, key = jrandom.split(jrandom.PRNGKey(distmult_config.seed), 2)
+    distmult_model = distmult_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
+    distmult_treedef = jax.tree_util.tree_flatten(distmult_model)[1]
+    distmult_model = jax.tree_util.tree_unflatten(distmult_treedef, distmult_load_model)
+
+    model_init_key, key = jrandom.split(jrandom.PRNGKey(rgcn_config.seed), 2)
+    rgcn_model = rgcn_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
+                                                     key=model_init_key)
+    rgcn_treedef = jax.tree_util.tree_flatten(rgcn_model)[1]
+    rgcn_model = jax.tree_util.tree_unflatten(rgcn_treedef, rgcn_load_model)
+
+    ensemble_model = EnsembleModel(distmult_model, rgcn_model, key)
+
+    #logging.info(str(distmult_config))
+    logging.info(str(ensemble_model))
+
+    test_edge_index = dataset.edge_index[:, dataset.test_idx]
+    test_edge_type = dataset.edge_type[dataset.test_idx]
+
+    pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
+    num_nodes = dataset.num_nodes
+
+    complete_pos_edge_index = jnp.concatenate((pos_edge_index, jnp.flip(pos_edge_index, axis=0)), axis=1)
+    complete_pos_edge_type = jnp.concatenate((pos_edge_type, pos_edge_type + dataset.num_relations))
+    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=2 * dataset.num_relations,
+                                                            edge_index=complete_pos_edge_index,
+                                                            edge_type=complete_pos_edge_type)
+    all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
+
+    test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
+                                 test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
+
+    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, ensemble_model, test_data,
+                                                                                           test_edge_index, all_data)
+
+    logging.info(f'Unfiltered: {unfiltered_results}')
+
+    filtered_results = generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data,
+                                             test_edge_index)
+
+    logging.info(f'Filtered: {filtered_results}')
 
 if __name__ == '__main__':
     train()

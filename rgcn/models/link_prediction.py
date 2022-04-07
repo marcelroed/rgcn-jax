@@ -17,9 +17,9 @@ from warnings import warn
 from abc import ABC, abstractmethod
 
 
+
 def safe_log(x, eps=1e-15):
     return jnp.log(jnp.clip(x, eps, None))
-
 
 def cross_entropy_loss(x, y):
     # max_val = jnp.clip(x, 0, None)
@@ -31,7 +31,6 @@ def cross_entropy_loss(x, y):
 def margin_ranking_loss(scores_pos, scores_neg, gamma):
     final = jnp.clip(gamma - scores_pos + scores_neg, 0, None)
     return jnp.sum(final)
-
 
 @pytree_dataclass
 class BasicModelData:
@@ -435,3 +434,67 @@ class LearnedEnsembleModel(eqx.Module, BaseModel):
             return self.l2_reg * (self.decoder1.l2_loss() + self.decoder2.l2_loss())
         else:
             return jnp.array(0.)
+
+
+class EnsembleModel(eqx.Module, BaseModel):
+    model1: RGCNModel
+    model2: GenericShallowModel
+    alpha: jnp.array
+
+  #  @dataclass
+   # class Config():
+    #    def get_model(self, model1, model2, key):
+     #       return EnsembleModel(self, model1, model2, key)
+    #config: Config,
+    def __init__(self,  model1, model2, key):
+        super().__init__()
+        #self.l2_reg = config.l2_reg
+        key1, key2 = jrandom.split(key, 2)
+        self.model1 = model1
+        self.model2 = model2
+        self.alpha = jnp.array(0.4)
+
+    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        key1, key2 = jrandom.split(key)
+        embeddings1 = self.model1.encoder(all_data, key1)
+        num_channels = embeddings1.shape[1]
+        combined = jnp.stack(
+            (embeddings1[:, :num_channels // 2],
+             embeddings1[:, num_channels // 2:]),
+            axis=1
+        )
+        embeddings2 = self.model2.encoder(all_data, key2)
+        scores1 = self.model1.decoder(combined, edge_index, rel)
+        scores2 = self.model2.decoder(embeddings2, edge_index, rel)
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def get_node_embeddings(self, all_data):
+        embeddings1 = self.model1.get_node_embeddings(all_data)
+        num_channels = embeddings1.shape[1]
+        combined = jnp.stack(
+            (embeddings1[:, :num_channels // 2],
+             embeddings1[:, num_channels // 2:]),
+            axis=1
+        )
+        embeddings2 = self.model2.get_node_embeddings(all_data)
+        return jnp.stack([combined, embeddings2], axis=0)
+
+    def forward_heads(self, node_embeddings, relation_type, tail):
+        scores1 = self.model1.forward_heads(node_embeddings[0, ...], relation_type, node_embeddings[0, tail, ...])
+        scores2 = self.model2.forward_heads(node_embeddings[1, ...], relation_type, node_embeddings[1, tail, ...])
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def forward_tails(self, node_embeddings, relation_type, head):
+        scores1 = self.model1.forward_tails(node_embeddings[0, head, ...], relation_type, node_embeddings[0, ...])
+        scores2 = self.model2.forward_tails(node_embeddings[1, head, ...], relation_type, node_embeddings[1, ...])
+        return self.alpha * scores1 + (1 - self.alpha) * scores2
+
+    def loss(self, edge_index, edge_type, mask, all_data, key):
+        scores = self(edge_index, edge_type, all_data, key=key)
+        return cross_entropy_loss(scores, mask)
+
+    def l2_loss(self):
+        return jnp.array(0.)
+
+    def normalize(self):
+        self.model2.encoder.normalize()
