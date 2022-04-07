@@ -27,6 +27,9 @@ from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 jax.config.update('jax_log_compiles', False)
 
+# jax.config.update('jax_platform_name', 'cpu')
+
+
 
 # WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
 
@@ -108,29 +111,29 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=125, learning_rate=0.05, seed=42, decomposition_method='basis'),
+                             epochs=600, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
-                                     epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis'),
+                                     epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
     'doublergcn': DoubleRGCNModel.Config(decoder_class=SimplE, hidden_channels=[150], normalizing_constant='per_node',
                                          edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None, name='DoubleRGCN',
-                                         epochs=250, learning_rate=0.05, seed=42, decomposition_method='basis'),
+                                         epochs=250, learning_rate=0.05, seed=42, decomposition_method='basis', n_decomp=2),
     'learnedensemble': LearnedEnsembleModel.Config(decoder_class=DistMult, hidden_channels=[200],
                                                    normalizing_constant='per_node',
                                                    edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
                                                    name='LearnedEnsemble',
                                                    epochs=600, learning_rate=0.05, seed=42,
                                                    decomposition_method='basis',
-                                                   n_channels=200, n_embeddings=1, normalization=False),
+                                                   n_channels=200, n_embeddings=1, normalization=False, n_decomp=2),
     'simpleensemble': LearnedEnsembleModel.Config(decoder_class=SimplE, hidden_channels=[300],
                                                   normalizing_constant='per_node',
                                                   edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
                                                   name='SimplEnsemble',
                                                   epochs=600, learning_rate=0.05, seed=42,
                                                   decomposition_method='basis',
-                                                  n_channels=150, n_embeddings=2, normalization=False)
+                                                  n_channels=150, n_embeddings=2, normalization=False, n_decomp=2)
 }
 
 
@@ -153,11 +156,11 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
 
 def train():
     logging.info('-' * 50)
-    dataset = LinkPredictionWrapper.load_wordnet18()
+    dataset = LinkPredictionWrapper.load_fb15k_237()
     # dataset = LinkPredictionWrapper.load_wordnet18()
     logging.info(dataset.name)
 
-    model_config = model_configs['distmult']
+    model_config = model_configs['rgcn']
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
     model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
 

@@ -6,6 +6,7 @@ from typing_extensions import Literal
 
 import equinox as eqx
 import jax
+import jax.experimental.host_callback as hcb
 
 import numpy as np
 from jax import numpy as jnp
@@ -88,6 +89,10 @@ class MRRResults:
         return head_results.average_with(tail_results)
 
 
+def _parallel_sort_callback(x):
+    return parallel_argsort_last(x)
+
+
 def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail'], force_cpu=False) -> MRRResults:
     assert corrupt in ['head', 'tail']
     if jax.default_backend() == 'gpu' and not force_cpu:
@@ -116,30 +121,29 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
         return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
 
     else:
-        hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
-
         # hrt_scores: (n_test_edges, n_nodes)
-        perm = parallel_argsort_last(-hrt_scores)
+        perm = hcb.call(callback_func=_parallel_sort_callback, arg=-hrt_scores, result_shape=hrt_scores.astype(jnp.int32))
         # Find the location of the true edges in the sorted list
+
         if corrupt == 'head':
             mask = perm == test_edge_index[0, :].reshape((-1, 1))
         else:
             mask = perm == test_edge_index[1, :].reshape((-1, 1))
 
         # Get the index of the true edges in the sorted list
-        true_index = np.argmax(mask, axis=1) + 1
+        true_index = jnp.argmax(mask, axis=1) + 1
         # Get the reciprocal rank of the true edges
-        rr = 1.0 / true_index.astype(np.float32)
+        rr = 1.0 / true_index.astype(jnp.float32)
 
         # Get the mean reciprocal rank
-        mrr = np.mean(rr).item()
+        mrr = jnp.mean(rr)
 
         # Get the hits@10 of the true edges
-        hits10 = np.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
+        hits10 = jnp.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
         # Get the hits@3 of the true edges
-        hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
+        hits3 = jnp.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
         # Get the hits@1 of the true edges
-        hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
+        hits1 = jnp.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
         return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
 
 

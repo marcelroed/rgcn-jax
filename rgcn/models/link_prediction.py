@@ -176,6 +176,7 @@ class RGCNModel(eqx.Module, BaseModel):
         edge_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         node_dropout_rate: Optional[float]  # None -> 1.0, meaning no dropout
         normalizing_constant: Literal['per_relation_node', 'per_node', 'none']
+        n_decomp: int
         decomposition_method: Literal['basis', 'block', 'none']
 
         def get_model(self, n_nodes, n_relations, key):
@@ -186,8 +187,8 @@ class RGCNModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key)
         self.encoder = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                   config.normalizing_constant, config.decomposition_method, n_nodes, n_relations, key1)
-        self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key2)
+                                   config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations, key1)
+        self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], normalize=False, key=key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
         embeddings = self.encoder(all_data, key)

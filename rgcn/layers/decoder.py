@@ -30,10 +30,12 @@ class Decoder(ABC):
 class DistMult(eqx.Module, Decoder):
     n_relations: int
     weights: jnp.ndarray
+    normalize: bool
 
-    def __init__(self, n_relations, n_channels, key):
+    def __init__(self, n_relations, n_channels, normalize, key):
         self.n_relations = n_relations
         self.weights = jax.nn.initializers.xavier_normal()(key, (n_relations, n_channels))
+        self.normalize = normalize
         # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
@@ -43,10 +45,12 @@ class DistMult(eqx.Module, Decoder):
         # edge_type_idcs_mask: [n_edges_per_relation_max]
 
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
-        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
         r = self.weights[edge_type, :]  # [n_edges, n_channels]
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
-        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
+
+        if self.normalize:
+            s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+            o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
         return jnp.sum(s * r * o, axis=1)
         # return jnp.einsum('ec,ec,ec->e', s, r, o)

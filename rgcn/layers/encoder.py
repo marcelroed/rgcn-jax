@@ -61,13 +61,13 @@ class RGCNEncoder(eqx.Module, Encoder):
 
     def __init__(self, hidden_channels, edge_dropout_rate: float, node_dropout_rate: float,
                  normalizing_constant: Literal['per_relation_node', 'per_node', 'none'],
-                 decomposition_method: Literal['basis', 'block', 'none'], n_nodes: int, n_relations: int, key):
+                 decomposition_method: Literal['basis', 'block', 'none'], n_decomp: int, n_nodes: int, n_relations: int, key):
         super().__init__()
         key1, key2 = jrandom.split(key)
         self.dropout_rate = edge_dropout_rate
 
         # Use 2 bases or 5 blocks
-        n_decomp = 2 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
+        # n_decomp = 2 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
 
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
@@ -80,6 +80,7 @@ class RGCNEncoder(eqx.Module, Encoder):
         ]
 
         if decomposition_method == 'block':
+            print('Using pre_transform matrix')
             self.pre_transform = jax.nn.initializers.normal()(key2, (n_nodes, 500))
         else:
             self.pre_transform = None
