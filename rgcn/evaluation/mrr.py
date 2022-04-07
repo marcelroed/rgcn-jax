@@ -82,62 +82,89 @@ class MRRResults:
         )
 
     @classmethod
-    def generate_from(cls, head_hrt_scores, tail_hrt_scores, test_edge_index):
-        head_results = mean_reciprocal_rank_and_hits(head_hrt_scores, test_edge_index, 'head')
-        tail_results = mean_reciprocal_rank_and_hits(tail_hrt_scores, test_edge_index, 'tail')
+    def generate_from(cls, head_hrt_scores, tail_hrt_scores, test_edge_index, force_cpu=False):
+        head_results = mean_reciprocal_rank_and_hits(head_hrt_scores, test_edge_index, 'head', force_cpu=force_cpu)
+        tail_results = mean_reciprocal_rank_and_hits(tail_hrt_scores, test_edge_index, 'tail', force_cpu=force_cpu)
         return head_results.average_with(tail_results)
 
 
-def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail']) -> MRRResults:
-    hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
+def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail'], force_cpu=False) -> MRRResults:
     assert corrupt in ['head', 'tail']
+    if jax.default_backend() == 'gpu' and not force_cpu:
+        # hrt_scores: (n_test_edges, n_nodes)
+        perm = jnp.argsort(-hrt_scores, axis=-1)
+        # Find the location of the true edges in the sorted list
+        if corrupt == 'head':
+            mask = perm == test_edge_index[0, :].reshape((-1, 1))
+        else:
+            mask = perm == test_edge_index[1, :].reshape((-1, 1))
 
-    # hrt_scores: (n_test_edges, n_nodes)
-    perm = parallel_argsort_last(-hrt_scores)
-    # Find the location of the true edges in the sorted list
-    if corrupt == 'head':
-        mask = perm == test_edge_index[0, :].reshape((-1, 1))
+        # Get the index of the true edges in the sorted list
+        true_index = jnp.argmax(mask, axis=1) + 1
+        # Get the reciprocal rank of the true edges
+        rr = 1.0 / true_index.astype(jnp.float32)
+
+        # Get the mean reciprocal rank
+        mrr = jnp.mean(rr)
+
+        # Get the hits@10 of the true edges
+        hits10 = jnp.sum(mask[:, :10], axis=1, dtype=jnp.float32).mean()
+        # Get the hits@3 of the true edges
+        hits3 = jnp.sum(mask[:, :3], axis=1, dtype=jnp.float32).mean()
+        # Get the hits@1 of the true edges
+        hits1 = jnp.sum(mask[:, :1], axis=1, dtype=jnp.float32).mean()
+        return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
+
     else:
-        mask = perm == test_edge_index[1, :].reshape((-1, 1))
+        hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
 
-    # Get the index of the true edges in the sorted list
-    true_index = np.argmax(mask, axis=1) + 1
-    # Get the reciprocal rank of the true edges
-    rr = 1.0 / true_index.astype(np.float32)
+        # hrt_scores: (n_test_edges, n_nodes)
+        perm = parallel_argsort_last(-hrt_scores)
+        # Find the location of the true edges in the sorted list
+        if corrupt == 'head':
+            mask = perm == test_edge_index[0, :].reshape((-1, 1))
+        else:
+            mask = perm == test_edge_index[1, :].reshape((-1, 1))
 
-    # Get the mean reciprocal rank
-    mrr = np.mean(rr)
+        # Get the index of the true edges in the sorted list
+        true_index = np.argmax(mask, axis=1) + 1
+        # Get the reciprocal rank of the true edges
+        rr = 1.0 / true_index.astype(np.float32)
 
-    # Get the hits@10 of the true edges
-    hits10 = np.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
-    # Get the hits@3 of the true edges
-    hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
-    # Get the hits@1 of the true edges
-    hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
-    return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
+        # Get the mean reciprocal rank
+        mrr = np.mean(rr).item()
+
+        # Get the hits@10 of the true edges
+        hits10 = np.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
+        # Get the hits@3 of the true edges
+        hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
+        # Get the hits@1 of the true edges
+        hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
+        return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
 
 
-def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
+def generate_unfiltered_mrr(num_nodes, model, test_data, all_data, force_cpu=False):
     batch_dim = [i for i in range(1, 10) if test_data.shape[1] % i == 0][-1]
     logging.info(f'Using a batch_dim of {batch_dim} for generating logits')
     with time_block('Unfiltered MRR'):
         with time_block('Computing head scores'):
-            head_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim,
+            head_corrupt_scores = make_generate_logits(model, num_nodes, all_data, batch_dim=batch_dim,
                                                        mode='head')(test_data)
         with time_block('Computing tail scores'):
-            tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim,
+            tail_corrupt_scores = make_generate_logits(model, num_nodes, all_data, batch_dim=batch_dim,
                                                        mode='tail')(test_data)
         with time_block('Computing MRR'):
-            unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
+            test_edge_index = test_data[:2, :]
+            unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index, force_cpu=force_cpu)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
 
-def generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data, test_edge_index):
+def generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data, test_edge_index, force_cpu=False):
     mask_head, mask_tail = generate_mrr_filter_mask(np.array(dataset.edge_index), np.array(dataset.edge_type),
                                                     num_nodes, np.array(test_data))
     head_filtered_scores = filter_scores(scores=head_corrupt_scores, mask=mask_head)
     tail_filtered_scores = filter_scores(scores=tail_corrupt_scores, mask=mask_tail)
-    filtered_results = MRRResults.generate_from(head_filtered_scores, tail_filtered_scores, test_edge_index)
+    filtered_results = MRRResults.generate_from(head_filtered_scores, tail_filtered_scores, test_edge_index, force_cpu=force_cpu)
     return filtered_results
 
 
@@ -167,6 +194,9 @@ def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal[
         # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)
         batched_test_data = test_data.reshape((-1, batch_dim, 3))  # [batch_size, n_test_edges, 3]
 
-        return jax.lax.map(loop, batched_test_data).reshape((-1, num_nodes))
+        print(f'{batched_test_data.shape=}')
+        result = jax.lax.map(loop, batched_test_data)
+        print(f'{result.shape=} trying to reshape to {(-1, num_nodes)}')
+        return result.reshape((-1, num_nodes))
 
     return generate_logits

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import sys
 import pickle
@@ -15,13 +16,13 @@ logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
-    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel, EnsembleModel
+    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel
 from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 import jax.random as jrandom
 import jax.numpy as jnp
 import equinox as eqx
 from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_batched_negative_sample_dense_rel
-from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
+from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr, MRRResults
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 jax.config.update('jax_log_compiles', False)
@@ -93,7 +94,7 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, 
 model_configs = {
     'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=100, l2_reg=None, name='DistMult',
                                            n_embeddings=1, normalization=True,
-                                           epochs=100, learning_rate=0.5, seed=42),
+                                           epochs=600, learning_rate=0.5, seed=42),
     'complex': GenericShallowModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
                                           n_embeddings=2, normalization=False,
                                           epochs=100, learning_rate=0.05, seed=42),
@@ -106,9 +107,9 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=10, learning_rate=0.05, seed=42, decomposition_method='basis'),
+                             epochs=125, learning_rate=0.05, seed=42, decomposition_method='basis'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis'),
@@ -132,25 +133,28 @@ model_configs = {
 }
 
 
-@eqx.filter_jit
-def train_step(*, model, all_data, optimizer, opt_state, key, get_train_epoch_data_fast):
-    data_key, model_key, key = jrandom.split(key, 3)
-    train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
+def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast):
+    @eqx.filter_jit
+    def train_step(*, model, opt_state, key):
+        data_key, model_key, key = jrandom.split(key, 3)
+        train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
 
-    loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
-    updates, opt_state = optimizer.update(grads, opt_state)
+        loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
+        updates, opt_state = optimizer.update(grads, opt_state)
 
-    model = eqx.apply_updates(model, updates)
-    return model, opt_state, loss
+        model = eqx.apply_updates(model, updates)
+        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes, model, val_data, all_data)
+        return model, opt_state, loss, val_mrr_results.mrr
+    return train_step
 
 
 def train():
     logging.info('-' * 50)
-    # dataset = LinkPredictionWrapper.load_fb15k_237()
     dataset = LinkPredictionWrapper.load_wordnet18()
+    # dataset = LinkPredictionWrapper.load_wordnet18()
     logging.info(dataset.name)
 
-    model_config = model_configs['rgcn']
+    model_config = model_configs['distmult']
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
     model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
 
@@ -159,8 +163,8 @@ def train():
 
     optimizer = optax.adam(learning_rate=model_config.learning_rate)  # ComplEx
 
-    test_edge_index = dataset.edge_index[:, dataset.test_idx]
-    test_edge_type = dataset.edge_type[dataset.test_idx]
+    val_edge_index = dataset.edge_index[:, dataset.val_idx]
+    val_edge_type = dataset.edge_type[dataset.val_idx]
 
     num_epochs = model_config.epochs  # and 1
 
@@ -174,6 +178,7 @@ def train():
                                                             edge_index=complete_pos_edge_index,
                                                             edge_type=complete_pos_edge_type)
     all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
+    del dense_relation, dense_mask, complete_pos_edge_index, complete_pos_edge_type
 
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
@@ -183,44 +188,58 @@ def train():
     #    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
     get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes)
 
-    opt_update = jax.jit(optimizer.update)
+    val_data = jnp.concatenate((val_edge_index, val_edge_type.reshape(1, -1)), axis=0)
 
     loss = None
     i = None
+
+    train_step = make_train_step(dataset.num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast)
+
+    best_model = None
+    best_val_mrr = 0.0
+
     try:
         for i in pbar:
-            model, opt_state, loss = train_step(model=model, all_data=all_data, optimizer=optimizer,
-                                                opt_state=opt_state, key=key,
-                                                get_train_epoch_data_fast=get_train_epoch_data_fast)
+            model, opt_state, loss, val_mrr = train_step(model=model, opt_state=opt_state, key=key)
 
-            pbar.set_description(f'\tLoss: {loss}')
+            if val_mrr > best_val_mrr or True:
+                logging.info(f'New best model found at epoch {i} with val_mrr {val_mrr}')
+                best_val_mrr = val_mrr
+                best_model = model
+
+            pbar.set_description(f'\tLoss: {loss}, val_mrr: {val_mrr}')
             pbar.refresh()
             if hasattr(model, 'alpha'):
                 object.__setattr__(model, 'alpha', jnp.clip(model.alpha, 0, 1))
     except KeyboardInterrupt:
         print(f'Interrupted training at epoch {i}')
 
+
+    model = best_model
+
     logging.info(f'Final loss: {loss}')
 
-    del loss, opt_state
+    del val_data, train_step, get_train_epoch_data_fast, opt_state, loss
+    gc.collect()
 
     # Generate MRR results
 
-    model.normalize()
-
+    # model.normalize()
     if hasattr(model, 'alpha'):
         logging.info(f'Alpha: {model.alpha}')
+
+    test_edge_index = dataset.edge_index[:, dataset.test_idx]
+    test_edge_type = dataset.edge_type[dataset.test_idx]
 
     test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
                                  test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
 
-    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, model, test_data,
-                                                                                           test_edge_index, all_data)
+    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset.num_nodes, model, test_data, all_data, force_cpu=True)
 
     logging.info(f'Unfiltered: {unfiltered_results}')
 
     filtered_results = generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data,
-                                             test_edge_index)
+                                             test_edge_index, force_cpu=True)
 
     logging.info(f'Filtered: {filtered_results}')
 

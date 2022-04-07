@@ -43,10 +43,10 @@ class DistMult(eqx.Module, Decoder):
         # edge_type_idcs_mask: [n_edges_per_relation_max]
 
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
-        # s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
         r = self.weights[edge_type, :]  # [n_edges, n_channels]
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
-        # o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
+        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
         return jnp.sum(s * r * o, axis=1)
         # return jnp.einsum('ec,ec,ec->e', s, r, o)

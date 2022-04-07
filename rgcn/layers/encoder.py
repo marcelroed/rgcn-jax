@@ -67,7 +67,7 @@ class RGCNEncoder(eqx.Module, Encoder):
         self.dropout_rate = edge_dropout_rate
 
         # Use 2 bases or 5 blocks
-        n_decomp = 10 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
+        n_decomp = 2 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
 
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,

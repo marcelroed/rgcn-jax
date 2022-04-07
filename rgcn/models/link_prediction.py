@@ -84,7 +84,7 @@ class GenericShallowModel(eqx.Module, BaseModel):
         normalization: bool
 
         def get_model(self, n_nodes, n_relations, key):
-            return GenericShallowModel(self, n_nodes, n_relations, key)
+            return GenericShallowModel(self, n_nodes=n_nodes, n_relations=n_relations, key=key)
 
     encoder: DirectEncoder
     decoder: Decoder
@@ -95,7 +95,7 @@ class GenericShallowModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.encoder = DirectEncoder(n_nodes, config.n_channels, key1, config.n_embeddings, config.normalization)
-        self.decoder = config.decoder_class(n_relations, config.n_channels, key2)
+        self.decoder = config.decoder_class(n_relations=n_relations, n_channels=config.n_channels, key=key2)
 
     def __call__(self, edge_index, edge_type, all_data, key):
         embeddings = self.encoder(all_data, key)
