@@ -95,7 +95,36 @@ def _parallel_sort_callback(x):
 
 def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal['head', 'tail'], force_cpu=False) -> MRRResults:
     assert corrupt in ['head', 'tail']
-    if jax.default_backend() == 'gpu' and not force_cpu:
+    if force_cpu:
+        hrt_scores, test_edge_index = map(np.array, (hrt_scores, test_edge_index))
+        # numpy implementation
+        # hrt_scores: (n_test_edges, n_nodes)
+        perm = np.argsort(-hrt_scores, axis=-1)
+        # Find the location of the true edges in the sorted list
+
+        if corrupt == 'head':
+            mask = perm == test_edge_index[0, :].reshape((-1, 1))
+        else:
+            mask = perm == test_edge_index[1, :].reshape((-1, 1))
+
+        # Get the index of the true edges in the sorted list
+        true_index = np.argmax(mask, axis=1) + 1
+        # Get the reciprocal rank of the true edges
+        rr = 1.0 / true_index.astype(jnp.float32)
+
+        # Get the mean reciprocal rank
+        mrr = np.mean(rr).item()
+
+        # Get the hits@10 of the true edges
+        hits10 = np.sum(mask[:, :10], axis=1, dtype=np.float32).mean()
+        # Get the hits@3 of the true edges
+        hits3 = np.sum(mask[:, :3], axis=1, dtype=np.float32).mean()
+        # Get the hits@1 of the true edges
+        hits1 = np.sum(mask[:, :1], axis=1, dtype=np.float32).mean()
+        return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
+    elif jax.default_backend() == 'gpu':
+        # Jax GPU implementation
+
         # hrt_scores: (n_test_edges, n_nodes)
         perm = jnp.argsort(-hrt_scores, axis=-1)
         # Find the location of the true edges in the sorted list
@@ -119,8 +148,8 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
         # Get the hits@1 of the true edges
         hits1 = jnp.sum(mask[:, :1], axis=1, dtype=jnp.float32).mean()
         return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
-
     else:
+        # Jax CPU implementation
         # hrt_scores: (n_test_edges, n_nodes)
         perm = hcb.call(callback_func=_parallel_sort_callback, arg=-hrt_scores, result_shape=hrt_scores.astype(jnp.int32))
         # Find the location of the true edges in the sorted list

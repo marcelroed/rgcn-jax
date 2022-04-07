@@ -113,7 +113,7 @@ model_configs = {
                                  epochs=1000, learning_rate=0.01, seed=42),
     'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=600, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
+                             epochs=50, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
