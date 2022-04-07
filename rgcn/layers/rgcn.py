@@ -6,6 +6,7 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import equinox as eqx
 import jax.random as jrandom
+import numpy as np
 import optax
 from einops import rearrange
 
@@ -85,6 +86,7 @@ class BlockRelLinear(eqx.Module):
     def apply(self, rel, x):
         if self.remainder_block is None:
             # x: [num_points, in_features] -> [num_points, num_blocks, in_block_size]
+            # where num_blocks * in_block_size = in_features
             x_by_block = rearrange(x, 'num_points (num_blocks in_block_size) -> num_points num_blocks in_block_size', num_blocks=self.blocks.shape[1])
             relation_blocks = self.blocks[rel]
             transformed = jnp.einsum('nio, pni -> pno', relation_blocks, x_by_block)
@@ -264,8 +266,38 @@ def test_rgcn_train():
     # @jax.grad
     # def loss_fn():
 
+
 def test_rgcnconv_block_decomp():
+    print()
     rgcn = RGCNConv(3, 2, 2, decomposition_method='block', n_decomp=1, normalizing_constant='per_node', dropout_rate=None, key=jrandom.PRNGKey(0))
     relation_edge_idcs = jnp.array([[[0, 1, 2], [1, 2, 0]], [[1, 2, -1], [2, 0, -1]]])
     result = rgcn(None, relation_edge_idcs, jnp.min(relation_edge_idcs, axis=1) == -1, key=jrandom.PRNGKey(0))
     print(result)
+
+
+def test_block_rel_linear():
+    print()
+    n_points = 1
+    in_dim = 4
+    out_dim = 4
+    rel = 0
+    n_relations = 2
+    n_blocks = 2
+    decomp = BlockRelLinear(in_dim, out_dim, n_relations, n_blocks, jrandom.PRNGKey(0))
+
+    print('Blocks for relation 0')
+    print(decomp.blocks[0])
+    print('\nBlock diag')
+    print(decomp.apply_id(0))
+
+    shape = (n_points, in_dim)
+    x = jnp.arange(np.prod(shape)).reshape(shape)
+    result = decomp.apply(rel, x)
+
+    # Apply the blocks separately and concatenate
+    manual_result = jnp.concatenate((x[:, :2] @ decomp.blocks[0, 0], x[:, 2:] @ decomp.blocks[0, 1]), axis=1)
+
+    assert jnp.allclose(manual_result, result)
+
+    print(result)
+    print(manual_result)
