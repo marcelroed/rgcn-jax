@@ -67,12 +67,16 @@ class RGCNEncoder(eqx.Module, Encoder):
         self.dropout_rate = edge_dropout_rate
 
         # Use 2 bases or 5 blocks
-        n_decomp = 2 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
+        n_decomp = 10 if decomposition_method == 'basis' else 100 if decomposition_method == 'block' else None
+
         self.rgcns = [
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
                      decomposition_method=decomposition_method, normalizing_constant=normalizing_constant,
                      dropout_rate=node_dropout_rate, n_decomp=n_decomp, key=key1)
-            for in_channels, out_channels in zip(hidden_channels[:-1], hidden_channels[1:])
+            for in_channels, out_channels in (
+                zip(hidden_channels[:-1], hidden_channels[1:]) if decomposition_method == 'block'
+                else zip([n_nodes] + hidden_channels[:-1], hidden_channels)
+            )
         ]
 
         if decomposition_method == 'block':
