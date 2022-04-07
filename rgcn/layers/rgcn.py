@@ -134,9 +134,9 @@ class RGCNConv(eqx.Module):
         self.n_relations = n_relations
         self.normalizing_constant = normalizing_constant
         self.dropout_rate = dropout_rate
-        glorot_initializer = jnn.initializers.glorot_uniform()
+        initializer = jnn.initializers.he_normal()
 
-        self.self_weight = glorot_initializer(sw_key, (in_channels, out_channels), jnp.float32)
+        self.self_weight = initializer(sw_key, (in_channels, out_channels), jnp.float32)
 
         if decomposition_method == 'none':
             self.relation_weights = RelLinear(in_channels, out_channels, n_relations, rel_key)

@@ -72,7 +72,7 @@ class RGCNEncoder(eqx.Module, Encoder):
             RGCNConv(in_channels=in_channels, out_channels=out_channels, n_relations=2 * n_relations,
                      decomposition_method=decomposition_method, normalizing_constant=normalizing_constant,
                      dropout_rate=node_dropout_rate, n_decomp=n_decomp, key=key1)
-            for in_channels, out_channels in zip([500] + hidden_channels[:-1], hidden_channels)
+            for in_channels, out_channels in zip(hidden_channels[:-1], hidden_channels[1:])
         ]
 
         if decomposition_method == 'block':
@@ -92,7 +92,7 @@ class RGCNEncoder(eqx.Module, Encoder):
         return x
 
     def get_node_embeddings(self, all_data):
-        x = None
+        x = self.pre_transform  # May be None
         for layer in self.rgcns:
             x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks, key=None))
         return x

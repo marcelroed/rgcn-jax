@@ -4,7 +4,6 @@ import logging
 import sys
 
 import jax
-jax.config.update('jax_platform_name', 'cpu')
 
 import optax
 from tqdm import trange
@@ -22,7 +21,6 @@ import equinox as eqx
 from rgcn.data.sampling import make_dense_batched_negative_sample, make_dense_batched_negative_sample_dense_rel
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
-
 
 jax.config.update('jax_log_compiles', False)
 
@@ -103,7 +101,7 @@ model_configs = {
                                  epochs=1000, learning_rate=0.01, seed=42),
     'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=250, learning_rate=0.05, seed=42, decomposition_method='block'),
+                             epochs=500, learning_rate=0.05, seed=42, decomposition_method='block'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis'),
@@ -127,8 +125,20 @@ model_configs = {
 }
 
 
+@eqx.filter_jit
+def train_step(*, model, all_data, optimizer, opt_state, key, get_train_epoch_data_fast):
+    data_key, model_key, key = jrandom.split(key, 3)
+    train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
+
+    loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
+    updates, opt_state = optimizer.update(grads, opt_state)
+
+    model = eqx.apply_updates(model, updates)
+    return model, opt_state, loss
+
+
 def train():
-    logging.info('-'*50)
+    logging.info('-' * 50)
     dataset = LinkPredictionWrapper.load_fb15k_237()
     # dataset = LinkPredictionWrapper.load_wordnet18()
     logging.info(dataset.name)
@@ -172,21 +182,20 @@ def train():
     i = None
     try:
         for i in pbar:
-            data_key, model_key, key = jrandom.split(key, 3)
-            train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
-
-            loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
-            updates, opt_state = opt_update(grads, opt_state)
+            model, opt_state, loss = train_step(model=model, all_data=all_data, optimizer=optimizer,
+                                                opt_state=opt_state, key=key,
+                                                get_train_epoch_data_fast=get_train_epoch_data_fast)
 
             pbar.set_description(f'\tLoss: {loss}')
             pbar.refresh()
-            model = eqx.apply_updates(model, updates)
             if hasattr(model, 'alpha'):
                 object.__setattr__(model, 'alpha', jnp.clip(model.alpha, 0, 1))
     except KeyboardInterrupt:
         print(f'Interrupted training at epoch {i}')
 
     logging.info(f'Final loss: {loss}')
+
+    del loss, opt_state
 
     # Generate MRR results
 

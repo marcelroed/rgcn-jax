@@ -118,7 +118,7 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
 
 
 def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data):
-    batch_dim = [i for i in range(1, 500) if test_data.shape[1] % i == 0][-1]
+    batch_dim = [i for i in range(1, 10) if test_data.shape[1] % i == 0][-1]
     logging.info(f'Using a batch_dim of {batch_dim} for generating logits')
     with time_block('Unfiltered MRR'):
         with time_block('Computing head scores'):
@@ -127,7 +127,8 @@ def generate_unfiltered_mrr(dataset, model, test_data, test_edge_index, all_data
         with time_block('Computing tail scores'):
             tail_corrupt_scores = make_generate_logits(model, dataset.num_nodes, all_data, batch_dim=batch_dim,
                                                        mode='tail')(test_data)
-    unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
+        with time_block('Computing MRR'):
+            unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
 
@@ -144,21 +145,23 @@ def filter_scores(scores, mask):
     return scores.at[mask].set(-jnp.inf)
 
 
-def make_generate_logits(model, num_nodes, all_data, batch_dim=50, mode: Literal['head', 'tail'] = 'head'):
-    node_embeddings = model.get_node_embeddings(all_data)
+def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal['head', 'tail'] = 'head'):
+    node_embeddings = eqx.filter_jit(model.get_node_embeddings)(all_data)  # [n_nodes, embedding_dim]
+    print('Made node embeddings')
 
     @eqx.filter_jit
     def generate_logits(test_data):
         test_data = jnp.transpose(test_data)
 
         # test_data: [n_test_edges, 3]
-        @jax.vmap  # [n_test_edges, 3] -> [n_test_edges, n_nodes]
+        # [n_test_edges, 3] -> [n_test_edges, n_nodes]
+        @jax.vmap
         def loop(x):  # [3,] -> [n_nodes,]
             head, tail, relation_type = x[0], x[1], x[2]
             if mode == 'head':
-                return model.forward_heads(node_embeddings, relation_type, tail)
+                return eqx.filter_jit(model.forward_heads)(node_embeddings, relation_type, tail)
             else:
-                return model.forward_tails(node_embeddings, relation_type, head)
+                return eqx.filter_jit(model.forward_tails)(node_embeddings, relation_type, head)
 
         # Batch the test data
         # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)

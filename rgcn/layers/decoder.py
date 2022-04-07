@@ -33,7 +33,7 @@ class DistMult(eqx.Module, Decoder):
 
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
-        self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels))
+        self.weights = jax.nn.initializers.xavier_normal()(key, (n_relations, n_channels))
         # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
@@ -67,8 +67,12 @@ class DistMult(eqx.Module, Decoder):
     #    return result
 
     def forward_heads(self, heads, edge_type, tail):
-        r = self.weights[edge_type]
+        # heads: [num_nodes, n_channels]
+        # tail: [n_channels]
+        r = self.weights[edge_type]  # [n_channels,]
+
         # return jnp.sum(heads * (r * tail), axis=1)
+
         return jnp.einsum('ec,c,c->e', heads, r, tail)
 
     def forward_tails(self, head, edge_type, tails):

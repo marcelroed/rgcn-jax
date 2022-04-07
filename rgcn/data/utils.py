@@ -12,7 +12,7 @@ from tqdm import trange
 
 from rgcn.utils import memory
 from collections.abc import Callable
-from rgcn.layers.decoder import Decoder, DistMult
+from rgcn.layers.decoder import Decoder
 
 
 def torch_to_jax(tensor):
