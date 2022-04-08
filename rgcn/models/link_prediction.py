@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Optional, Union
 from typing_extensions import Literal
 
-import jax
 import optax
 from jax_dataclasses import pytree_dataclass
 
@@ -96,7 +95,8 @@ class GenericShallowModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.encoder = DirectEncoder(n_nodes, config.n_channels, key1, config.n_embeddings, config.normalization)
-        self.decoder = config.decoder_class(n_relations=n_relations, n_channels=config.n_channels, normalize=config.normalization, key=key2)
+        self.decoder = config.decoder_class(n_relations=n_relations, n_channels=config.n_channels,
+                                            normalize=config.normalization, key=key2)
 
     def __call__(self, edge_index, edge_type, all_data, key):
         embeddings = self.encoder(all_data, key)
@@ -335,10 +335,12 @@ class DoubleRGCNModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2, key3 = jrandom.split(key, 3)
         self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes,
+                                    n_relations,
                                     key1)
         self.encoder2 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes,
+                                    n_relations,
                                     key2)
         assert (config.decoder_class in [SimplE, ComplEx])
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key3)
@@ -395,7 +397,8 @@ class LearnedEnsembleModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2, key3, key4 = jrandom.split(key, 4)
         self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes,
+                                    n_relations,
                                     key1)
         self.encoder2 = DirectEncoder(n_nodes, config.n_channels, key2, config.n_embeddings, config.normalization)
         self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1], False, key3)
