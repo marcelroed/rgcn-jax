@@ -4,6 +4,7 @@ import gc
 import logging
 import sys
 import pickle
+from typing import Optional
 
 import jax
 import numpy as np
@@ -11,8 +12,6 @@ import numpy as np
 import optax
 from tqdm import trange
 
-logging.basicConfig(filename='logs.log', level=logging.INFO)
-logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
@@ -28,10 +27,6 @@ from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 jax.config.update('jax_log_compiles', False)
 
 # jax.config.update('jax_platform_name', 'cpu')
-
-
-
-# WordNet18: {n_nodes: 40_000, n_test_edges: 5000}
 
 
 def make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes):
@@ -111,9 +106,9 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=50, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
+                             epochs=50, learning_rate=0.05, seed=42, n_decomp=2, decomposition_method='basis'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
@@ -154,7 +149,10 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
     return train_step
 
 
-def train():
+def train(model: Optional[str] = None, dataset: Optional[str] = None):
+    logging.basicConfig(filename='logs.log', level=logging.INFO)
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
     logging.info('-' * 50)
     dataset = LinkPredictionWrapper.load_fb15k_237()
     # dataset = LinkPredictionWrapper.load_wordnet18()
@@ -230,7 +228,8 @@ def train():
 
     # Generate MRR results
 
-    # model.normalize()
+    model.normalize()
+
     if hasattr(model, 'alpha'):
         logging.info(f'Alpha: {model.alpha}')
 

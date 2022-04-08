@@ -17,9 +17,9 @@ from warnings import warn
 from abc import ABC, abstractmethod
 
 
-
 def safe_log(x, eps=1e-15):
     return jnp.log(jnp.clip(x, eps, None))
+
 
 def cross_entropy_loss(x, y):
     # max_val = jnp.clip(x, 0, None)
@@ -31,6 +31,7 @@ def cross_entropy_loss(x, y):
 def margin_ranking_loss(scores_pos, scores_neg, gamma):
     final = jnp.clip(gamma - scores_pos + scores_neg, 0, None)
     return jnp.sum(final)
+
 
 @pytree_dataclass
 class BasicModelData:
@@ -148,8 +149,12 @@ class TransEModel(GenericShallowModel):
 @pytree_dataclass
 class RGCNModelTrainingData:
     """Has extensions for the RGCN model"""
+
     edge_type_idcs: jnp.ndarray
+    "A dense tensor of shape (n_relations, 2, max_edges_per_relation) containing padded edge indices for each relation"
+
     edge_masks: jnp.ndarray
+    "Masks to indicate where the edge indices are valid, of shape (n_relations, max_edges_per_relation)"
 
     is_dense = True
 
@@ -185,14 +190,21 @@ class RGCNModel(eqx.Module, BaseModel):
     def __init__(self, config: Config, n_nodes, n_relations, key):
         super().__init__()
         self.l2_reg = config.l2_reg
+
         key1, key2 = jrandom.split(key)
         self.encoder = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                   config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations, key1)
+                                   config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes,
+                                   n_relations, key1)
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], normalize=False, key=key2)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+        # Get the embeddings for nodes using the encoder
         embeddings = self.encoder(all_data, key)
-        return self.decoder(embeddings, edge_index, rel)
+
+        # Use the decoder with the embeddings to get scores for the input edges
+        scores = self.decoder(embeddings, edge_index, rel)
+
+        return scores
 
     def get_node_embeddings(self, all_data):
         return self.encoder.get_node_embeddings(all_data)
@@ -256,8 +268,11 @@ class CombinedModel(eqx.Module, BaseModel):
         super().__init__()
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key)
-        self.encoder = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                   config.normalizing_constant, config.decomposition_method, n_nodes, n_relations, key1)
+        self.encoder = RGCNEncoder(hidden_channels=config.hidden_channels, edge_dropout_rate=config.edge_dropout_rate,
+                                   node_dropout_rate=config.node_dropout_rate,
+                                   normalizing_constant=config.normalizing_constant,
+                                   decomposition_method=config.decomposition_method, n_decomp=config.n_decomp,
+                                   n_nodes=n_nodes, n_relations=n_relations, key=key1)
         last_layer_channels = config.hidden_channels[-1]
         assert (last_layer_channels % 2 == 0)
         assert (config.decoder_class in [SimplE, ComplEx])
@@ -442,14 +457,14 @@ class EnsembleModel(eqx.Module, BaseModel):
     model2: GenericShallowModel
     alpha: jnp.array
 
-  #  @dataclass
-   # class Config():
+    #  @dataclass
+    # class Config():
     #    def get_model(self, model1, model2, key):
-     #       return EnsembleModel(self, model1, model2, key)
-    #config: Config,
-    def __init__(self,  model1, model2, key):
+    #       return EnsembleModel(self, model1, model2, key)
+    # config: Config,
+    def __init__(self, model1, model2, key):
         super().__init__()
-        #self.l2_reg = config.l2_reg
+        # self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.model1 = model1
         self.model2 = model2

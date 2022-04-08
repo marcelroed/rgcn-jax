@@ -227,9 +227,7 @@ def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal[
         # batched_test_data = rearrange(test_data, 'tuple (batch_size batch_dim) -> batch_size tuple batch_dim', batch_size=batch_size)
         batched_test_data = test_data.reshape((-1, batch_dim, 3))  # [batch_size, n_test_edges, 3]
 
-        print(f'{batched_test_data.shape=}')
         result = jax.lax.map(loop, batched_test_data)
-        print(f'{result.shape=} trying to reshape to {(-1, num_nodes)}')
         return result.reshape((-1, num_nodes))
 
     return generate_logits

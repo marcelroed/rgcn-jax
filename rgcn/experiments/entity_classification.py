@@ -11,16 +11,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optax
 from tqdm import trange
+from pprint import pformat
 
 from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
 from rgcn.models.classifier import RGCNClassifier
 
 # Set jax device to CPU
-# jax.config.update("jax_platform_name", "cpu")
-
-logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
-logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-
 
 def make_model(dataset, seed):
     if dataset.name == 'AIFB':
@@ -83,11 +79,6 @@ def test_results(model, x, edge_type_idcs, edge_masks, test_idx, test_y):
     return test_loss, accuracy
 
 
-@eqx.filter_jit
-def train_loop(model, x, edge_type_idx, y_idx, y):
-    pass
-
-
 def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityClassificationWrapper):
     epochs = 50
 
@@ -100,7 +91,7 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     pbar = trange(epochs)
-    losses, test_losses, test_accs = [], [], []
+    losses, val_losses, val_accs = [], [], []
     best_model = None
     min_val_loss = float('inf')
     # global loss_fn
@@ -111,8 +102,7 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
             updates, opt_state = optimizer.update(grads, opt_state)
             val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.val_idx,
                                              dataset.val_y)
-            losses.append(loss), test_losses.append(val_loss);
-            test_accs.append(val_acc)
+            losses.append(loss); val_losses.append(val_loss); val_accs.append(val_acc)
             model = eqx.apply_updates(model, updates)
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
@@ -120,14 +110,13 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
             pbar.set_description(f"Loss: {loss:.4f}, val_loss: {val_loss:.4f}, val_acc: {val_acc:.4f}")
     except KeyboardInterrupt:
         print('Training cancelled by KeyboardInterrupt')
-        raise KeyboardInterrupt()
-        pass
+        # raise KeyboardInterrupt()
 
     test_loss, test_acc = test_results(best_model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.test_idx,
                                        dataset.test_y)
     logging.info('Test loss: %.4f, test accuracy: %.4f', test_loss, test_acc)
 
-    return model, losses, test_losses, test_accs, test_acc
+    return model, jnp.array(losses), jnp.array(val_losses), jnp.array(val_accs), jnp.array(test_acc)
 
 
 def run_experiment(dataset, seed):
@@ -139,13 +128,15 @@ def run_experiment(dataset, seed):
     n = len(losses)
     x = np.arange(n)
     plt.plot(x, losses, label="train_loss")
-    plt.plot(x, val_losses, label="test_loss")
+    plt.plot(x, val_losses, label="val_loss")
     plt.legend()
     plt.savefig(f'{dataset.name.lower()}_{seed}_losses.png')
+    plt.show()
     plt.close()
 
     plt.plot(x, val_accs, label="val_acc")
     plt.legend()
+    plt.show()
     plt.savefig(f'{dataset.name.lower()}_{seed}_accs.png')
     plt.close()
 
@@ -156,6 +147,19 @@ def run_experiment(dataset, seed):
         'val_accs': val_accs,
         'test_acc': test_acc,
     }
+
+
+def main(dataset_name: str, seed):
+    """Entry point for CLI"""
+    jax.config.update("jax_platform_name", "cpu")
+    logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
+    logging.info(f'Running experiment with dataset: {dataset_name}, seed: {seed}')
+    dataset = EntityClassificationWrapper.load_dataset(dataset_name.upper())
+    results = run_experiment(dataset, seed)
+    logging.info(pformat(results))
+    logging.info(f'Test accuracy is {results["test_acc"]:.4f}')
 
 
 if __name__ == '__main__':

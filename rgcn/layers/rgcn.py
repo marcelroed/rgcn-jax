@@ -148,6 +148,15 @@ class RGCNConv(eqx.Module):
                                                    num_blocks=n_decomp, key=rel_key)
 
     def get_self_transform(self, x: Optional[jnp.ndarray] = None, key=None):
+        """
+
+        Args:
+            x:
+            key:
+
+        Returns:
+
+        """
         if x is None:
             # x is an identity matrix: [num_nodes, num_nodes] = [in_channels, in_channels]
             self_transform = self.self_weight  # [num_nodes=in_channels, out_channels]
