@@ -134,6 +134,16 @@ model_configs = {
 def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast):
     @eqx.filter_jit
     def train_step(*, model, opt_state, key):
+        """
+        Train the inputted model one epoch.
+        Args:
+            model:
+            opt_state:
+            key:
+
+        Returns:
+
+        """
         data_key, model_key = jrandom.split(key)
         train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
 
@@ -149,7 +159,12 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
 
 
 def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
-    jax.config.update('jax_platform_name', 'cpu')
+    """
+    Train link prediction model on a dataset.
+    Args:
+        model_name: Name of the model to train. The available models are the keys of the model_configs dictionary.
+        dataset_name: Name of the dataset to train on.
+    """
     logging.basicConfig(filename='logs.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
@@ -254,68 +269,6 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
 
     filtered_results = generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data,
                                              test_edge_index, force_cpu=True)
-
-    logging.info(f'Filtered: {filtered_results}')
-
-
-def test_ensemble():
-    logging.info('-' * 50)
-    # dataset = LinkPredictionWrapper.load_fb15k_237()
-    dataset = LinkPredictionWrapper.load_wordnet18()
-    logging.info(dataset.name)
-
-    with open(f'DistMult_model', 'rb') as f:
-        distmult_load_model = pickle.load(f)
-        distmult_load_model = jax.tree_map(jnp.array, distmult_load_model, is_leaf=lambda x: isinstance(x, np.ndarray))
-
-    with open(f'RGCN_model', 'rb') as f:
-        rgcn_load_model = pickle.load(f)
-        rgcn_load_model = jax.tree_map(jnp.array, rgcn_load_model, is_leaf=lambda x: isinstance(x, np.ndarray))
-
-    distmult_config = model_configs['distmult']
-    rgcn_config = model_configs['rgcn']
-
-    model_init_key, key = jrandom.split(jrandom.PRNGKey(distmult_config.seed), 2)
-    distmult_model = distmult_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
-                                               key=model_init_key)
-    distmult_treedef = jax.tree_util.tree_flatten(distmult_model)[1]
-    distmult_model = jax.tree_util.tree_unflatten(distmult_treedef, distmult_load_model)
-
-    model_init_key, key = jrandom.split(jrandom.PRNGKey(rgcn_config.seed), 2)
-    rgcn_model = rgcn_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
-                                       key=model_init_key)
-    rgcn_treedef = jax.tree_util.tree_flatten(rgcn_model)[1]
-    rgcn_model = jax.tree_util.tree_unflatten(rgcn_treedef, rgcn_load_model)
-
-    ensemble_model = EnsembleModel(distmult_model, rgcn_model, key)
-
-    # logging.info(str(distmult_config))
-    logging.info(str(ensemble_model))
-
-    test_edge_index = dataset.edge_index[:, dataset.test_idx]
-    test_edge_type = dataset.edge_type[dataset.test_idx]
-
-    pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
-    num_nodes = dataset.num_nodes
-
-    complete_pos_edge_index = jnp.concatenate((pos_edge_index, jnp.flip(pos_edge_index, axis=0)), axis=1)
-    complete_pos_edge_type = jnp.concatenate((pos_edge_type, pos_edge_type + dataset.num_relations))
-    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=2 * dataset.num_relations,
-                                                            edge_index=complete_pos_edge_index,
-                                                            edge_type=complete_pos_edge_type)
-    all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
-
-    test_data = jnp.concatenate((test_edge_index,  # (2, n_test_edges)
-                                 test_edge_type.reshape(1, -1)), axis=0)  # [3, n_test_edges]
-
-    head_corrupt_scores, tail_corrupt_scores, unfiltered_results = generate_unfiltered_mrr(dataset, ensemble_model,
-                                                                                           test_data,
-                                                                                           test_edge_index, all_data)
-
-    logging.info(f'Unfiltered: {unfiltered_results}')
-
-    filtered_results = generate_filtered_mrr(dataset, head_corrupt_scores, num_nodes, tail_corrupt_scores, test_data,
-                                             test_edge_index)
 
     logging.info(f'Filtered: {filtered_results}')
 

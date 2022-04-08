@@ -27,10 +27,10 @@ class RGCNClassifier(eqx.Module):
         key1, key2 = jrandom.split(key, 2)
         self.layers = [
             RGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations,
-                     decomposition_method=decomposition_method, normalizing_constant='none',
+                     decomposition_method=decomposition_method, normalizing_constant='per_relation_node',
                      dropout_rate=None, n_decomp=n_decomp, key=key1),
             RGCNConv(in_channels=hidden_channels, out_channels=n_classes, n_relations=n_relations,
-                     decomposition_method=decomposition_method, normalizing_constant='none',
+                     decomposition_method=decomposition_method, normalizing_constant='per_relation_node',
                      dropout_rate=None, n_decomp=n_decomp, key=key2),
         ]
 

@@ -1,7 +1,7 @@
 import logging
 import pickle
 import sys
-from statistics import mean
+from statistics import mean, stdev
 
 import equinox as eqx
 import jax
@@ -163,10 +163,12 @@ def main(dataset_name: str, seed):
 
 
 if __name__ == '__main__':
-    dataset = EntityClassificationWrapper.load_dataset('AM')
+    logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    dataset = EntityClassificationWrapper.load_dataset('AIFB')
     results = []
     try:
-        for i in trange(2, desc='Running models with different seeds'):
+        for i in trange(10, desc='Running models with different seeds'):
             result = run_experiment(dataset, seed=i)
             results.append(result)
     except KeyboardInterrupt:
@@ -175,6 +177,9 @@ if __name__ == '__main__':
     results = {k: [results[i][k].tolist() if isinstance(results[i][k], jnp.ndarray) else results[i][k] for i in
                    range(len(results))] for k in results[0].keys()}
     logging.info(f'Mean of test accuracies {mean(results["test_acc"])}')
+    logging.info(f'Std of test accuracies {stdev(results["test_acc"])}')
+    logging.info(f'Max of test accuracies {max(results["test_acc"])}')
+    logging.info(f'Min of test accuracies {min(results["test_acc"])}')
 
     with open(f'{dataset.name.lower()}_results.pkl', 'wb') as f:
         pickle.dump(results, f)
