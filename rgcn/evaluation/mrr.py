@@ -206,8 +206,10 @@ def filter_scores(scores, mask):
 
 
 def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal['head', 'tail'] = 'head'):
+    """Construct a JIT-ed function to generate logits for a set of """
+
+    # Get
     node_embeddings = eqx.filter_jit(model.get_node_embeddings)(all_data)  # [n_nodes, embedding_dim]
-    print('Made node embeddings')
 
     @eqx.filter_jit
     def generate_logits(test_data):

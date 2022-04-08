@@ -16,9 +16,14 @@ from pprint import pformat
 from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
 from rgcn.models.classifier import RGCNClassifier
 
-# Set jax device to CPU
+import warnings
+
+
+warnings.simplefilter('ignore', FutureWarning)
+
 
 def make_model(dataset, seed):
+    """Get the appropriate model for the dataset."""
     if dataset.name == 'AIFB':
         l2_reg = None
         decomposition_method = 'none'
@@ -42,10 +47,12 @@ def make_model(dataset, seed):
     else:
         raise ValueError(f'Unknown dataset: {dataset.name}')
 
+    # Always use the same RGCNClassifier class
     classifier = RGCNClassifier(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations,
                                 hidden_channels=hidden_channels,
                                 n_classes=dataset.num_classes, decomposition_method=decomposition_method,
                                 n_decomp=n_decomp, l2_reg=l2_reg, key=random.PRNGKey(seed))
+
     optimizer = optax.adam(learning_rate=1e-2)
 
     return classifier, optimizer
@@ -71,6 +78,9 @@ def loss_fn(model, x, edge_type_idcs, edge_masks, y_idx, y):
 
 @eqx.filter_jit
 def test_results(model, x, edge_type_idcs, edge_masks, test_idx, test_y):
+    """
+    Get loss and accuracy for a dataset split.
+    """
     logits = model(x, edge_type_idcs, edge_masks)[test_idx]
     predictions = jnp.argmax(logits, axis=-1)
     accuracy = jnp.mean(predictions == test_y)
@@ -80,6 +90,8 @@ def test_results(model, x, edge_type_idcs, edge_masks, test_idx, test_y):
 
 
 def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityClassificationWrapper):
+    """Train for several epochs and get test results for the resulting model."""
+
     epochs = 50
 
     x = dataset.node_features
@@ -120,6 +132,7 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
 
 
 def run_experiment(dataset, seed):
+    """Run training, evaluation and plot results."""
     logging.info('Training seed: %d', seed)
     model, optimizer = make_model(dataset, seed)
 
@@ -163,9 +176,11 @@ def main(dataset_name: str, seed):
 
 
 if __name__ == '__main__':
+    # When running as a script we run several instances of the experiment specified below and report aggregates
+
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    dataset = EntityClassificationWrapper.load_dataset('AIFB')
+    dataset = EntityClassificationWrapper.load_dataset('MUTAG')
     results = []
     try:
         for i in trange(10, desc='Running models with different seeds'):
@@ -180,6 +195,7 @@ if __name__ == '__main__':
     logging.info(f'Std of test accuracies {stdev(results["test_acc"])}')
     logging.info(f'Max of test accuracies {max(results["test_acc"])}')
     logging.info(f'Min of test accuracies {min(results["test_acc"])}')
+    logging.info(pformat(results))
 
     with open(f'{dataset.name.lower()}_results.pkl', 'wb') as f:
         pickle.dump(results, f)
