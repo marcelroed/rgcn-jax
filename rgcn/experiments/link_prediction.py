@@ -83,9 +83,14 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[100, 100, 100], normalizing_constant='per_node',
-                             edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=500, learning_rate=0.05, seed=42, n_decomp=20, decomposition_method='block'),
+    'rgcn-basis': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[100],
+                                   normalizing_constant='per_node',
+                                   edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
+                                   epochs=500, learning_rate=0.05, seed=42, n_decomp=2, decomposition_method='basis'),
+    'rgcn-block': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[500, 500],
+                                   normalizing_constant='per_node',
+                                   edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
+                                   epochs=500, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
@@ -110,7 +115,7 @@ model_configs = {
 }
 
 
-def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast):
+def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast, validation):
     @eqx.filter_jit
     def train_step(*, model, opt_state, key):
         """
@@ -124,19 +129,24 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
         updates, opt_state = optimizer.update(grads, opt_state)
 
         model = eqx.apply_updates(model, updates)
-        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes=num_nodes, model=model, test_data=val_data,
-                                                        all_data=all_data)
-        return model, opt_state, loss, val_mrr_results.mrr
+        if validation:
+            _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes=num_nodes, model=model, test_data=val_data,
+                                                            all_data=all_data)
+            mrr = val_mrr_results.mrr
+        else:
+            mrr = None
+        return model, opt_state, loss, mrr
 
     return train_step
 
 
-def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None, validation: bool = True):
     """
     Train a link prediction model on a dataset.
     Args:
         model_name: Name of the model to train. The available models are the keys of the model_configs dictionary.
         dataset_name: Name of the dataset to train on.
+        validation: Whether to compute and select using validation data.
     """
 
     # Setup logging
@@ -172,7 +182,8 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
 
     get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, dataset.num_nodes)
 
-    train_step = make_train_step(dataset.num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast)
+    train_step = make_train_step(dataset.num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast,
+                                 validation)
 
     best_model = None
     best_val_mrr = 0.0
@@ -187,7 +198,7 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
             train_key, key = jrandom.split(key)
             model, opt_state, loss, val_mrr = train_step(model=model, opt_state=opt_state, key=train_key)
 
-            if val_mrr > best_val_mrr:
+            if validation and val_mrr > best_val_mrr:
                 logging.info(f'\nNew best model found at epoch {i} with val_mrr {val_mrr}')
                 best_val_mrr = val_mrr
                 best_model = model
@@ -204,7 +215,8 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
     del val_data, train_step, get_train_epoch_data_fast, opt_state, loss, val_mrr
     gc.collect()
 
-    model = best_model  # Use the model with the best validation MRR
+    if validation:
+        model = best_model  # Use the model with the best validation MRR
 
     # Generate MRR results
 

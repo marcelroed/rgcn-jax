@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 
 import equinox as eqx
@@ -103,7 +104,7 @@ class ComplEx(eqx.Module, Decoder):
     weights_r: jnp.ndarray
     weights_i: jnp.ndarray
 
-    def __init__(self, n_relations, n_channels, key):
+    def __init__(self, n_relations, n_channels, key, **kwargs):
         self.n_relations = n_relations
         key1, key2 = random.split(key, 2)
         self.weights_r = jax.nn.initializers.glorot_normal()(key1, (n_relations, n_channels))
@@ -187,7 +188,7 @@ class SimplE(eqx.Module, Decoder):
     weights: jnp.ndarray
     weights_inv: jnp.ndarray
 
-    def __init__(self, n_relations, n_channels, key):
+    def __init__(self, n_relations, n_channels, key, **kwargs):
         self.n_relations = n_relations
         key1, key2 = random.split(key, 2)
         self.weights = jax.nn.initializers.glorot_normal()(key1, (n_relations, n_channels))
@@ -221,18 +222,23 @@ class RESCAL(eqx.Module, Decoder):
     n_relations: int
     n_channels: int
     weights: jnp.ndarray
+    normalize: bool
 
-    def __init__(self, n_relations, n_channels, key):
+    def __init__(self, n_relations, n_channels, normalize, key):
+        warnings.warn("RESCAL uses A LOT of memory. Consider using ComplEx instead.", category=ResourceWarning)
         self.n_relations = n_relations
         self.n_channels = n_channels
         self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels, n_channels))
+        self.normalize = normalize
 
     def __call__(self, x, edge_index, edge_type):
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
-        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
-        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
         r = self.weights[edge_type]  # [n_edges, n_channels, n_channels]
+
+        if self.normalize:
+            s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+            o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
         return (s.reshape(-1, self.n_channels, 1) *
                 jnp.matmul(r.reshape(-1, self.n_channels, self.n_channels),
@@ -253,17 +259,21 @@ class RESCAL(eqx.Module, Decoder):
 class TransE(eqx.Module, Decoder):
     n_relations: int
     weights: jnp.ndarray
+    normalize: bool
 
-    def __init__(self, n_relations, n_channels, key):
+    def __init__(self, n_relations, n_channels, normalize, key):
         self.n_relations = n_relations
+        self.normalize = normalize
         self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
-        s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
         r = self.weights[edge_type, :]  # [n_edges, n_channels]
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
-        o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
+
+        if self.normalize:
+            s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
+            o = o / jnp.linalg.norm(o, axis=1, keepdims=True)
 
         return -jnp.linalg.norm(s + r - o, axis=1, ord=1)
 

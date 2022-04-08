@@ -13,8 +13,9 @@ def cli():
               help='Model to use. Also decides epochs and learning rate.')
 @click.option('--dataset', default='wordnet18', type=click.Choice(['wordnet18', 'wordnet18rr', 'fb15k-237', 'fb15k']),
               help='Dataset to use. Note that FB15k is huge.')
-def link_prediction(model, dataset):
-    train_link_prediction(model, dataset)
+@click.option('--validation/--no-validation', default=False, help='Whether to use validation set for model selection.')
+def link_prediction(model, dataset, validation):
+    train_link_prediction(model, dataset, validation)
 
 
 # @click.option('--model', default='distmult', help='Model to use. Also decides epochs and learning rate.')
