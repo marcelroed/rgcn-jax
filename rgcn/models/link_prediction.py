@@ -96,7 +96,7 @@ class GenericShallowModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.encoder = DirectEncoder(n_nodes, config.n_channels, key1, config.n_embeddings, config.normalization)
-        self.decoder = config.decoder_class(n_relations=n_relations, n_channels=config.n_channels, key=key2)
+        self.decoder = config.decoder_class(n_relations=n_relations, n_channels=config.n_channels, normalize=config.normalization, key=key2)
 
     def __call__(self, edge_index, edge_type, all_data, key):
         embeddings = self.encoder(all_data, key)
@@ -335,10 +335,10 @@ class DoubleRGCNModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2, key3 = jrandom.split(key, 3)
         self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
                                     key1)
         self.encoder2 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
                                     key2)
         assert (config.decoder_class in [SimplE, ComplEx])
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key3)
@@ -395,37 +395,26 @@ class LearnedEnsembleModel(eqx.Module, BaseModel):
         self.l2_reg = config.l2_reg
         key1, key2, key3, key4 = jrandom.split(key, 4)
         self.encoder1 = RGCNEncoder(config.hidden_channels, config.edge_dropout_rate, config.node_dropout_rate,
-                                    config.normalizing_constant, config.decomposition_method, n_nodes, n_relations,
+                                    config.normalizing_constant, config.decomposition_method, config.n_decomp, n_nodes, n_relations,
                                     key1)
         self.encoder2 = DirectEncoder(n_nodes, config.n_channels, key2, config.n_embeddings, config.normalization)
-        self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1] // 2, key3)
-        self.decoder2 = config.decoder_class(n_relations, config.n_channels, key4)
+        self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1], False, key3)
+        self.decoder2 = config.decoder_class(n_relations, config.n_channels, False, key4)
         self.alpha = jnp.array(0.5)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
         key1, key2 = jrandom.split(key)
         embeddings1 = self.encoder1(all_data, key1)
-        num_channels = embeddings1.shape[1]
-        combined = jnp.stack(
-            (embeddings1[:, :num_channels // 2],
-             embeddings1[:, num_channels // 2:]),
-            axis=1
-        )
         embeddings2 = self.encoder2(all_data, key2)
-        scores1 = self.decoder1(combined, edge_index, rel)
+
+        scores1 = self.decoder1(embeddings1, edge_index, rel)
         scores2 = self.decoder2(embeddings2, edge_index, rel)
         return self.alpha * scores1 + (1 - self.alpha) * scores2
 
     def get_node_embeddings(self, all_data):
         embeddings1 = self.encoder1.get_node_embeddings(all_data)
-        num_channels = embeddings1.shape[1]
-        combined = jnp.stack(
-            (embeddings1[:, :num_channels // 2],
-             embeddings1[:, num_channels // 2:]),
-            axis=1
-        )
         embeddings2 = self.encoder2.get_node_embeddings(all_data)
-        return jnp.stack([combined, embeddings2], axis=0)
+        return jnp.stack([embeddings1, embeddings2], axis=0)
 
     def normalize(self):
         self.encoder2.normalize()

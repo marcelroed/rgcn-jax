@@ -10,7 +10,7 @@ import jax
 import numpy as np
 
 import optax
-from tqdm import trange
+from tqdm import trange, tqdm
 
 
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
@@ -26,7 +26,6 @@ from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 
 jax.config.update('jax_log_compiles', False)
 
-# jax.config.update('jax_platform_name', 'cpu')
 
 
 def make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes):
@@ -91,7 +90,7 @@ def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, 
 
 
 model_configs = {
-    'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=100, l2_reg=None, name='DistMult',
+    'distmult': GenericShallowModel.Config(decoder_class=DistMult, n_channels=200, l2_reg=None, name='DistMult',
                                            n_embeddings=1, normalization=True,
                                            epochs=600, learning_rate=0.5, seed=42),
     'complex': GenericShallowModel.Config(decoder_class=ComplEx, n_channels=200, l2_reg=None, name='ComplEx',
@@ -106,9 +105,9 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[100, 100, 100], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=50, learning_rate=0.05, seed=42, n_decomp=2, decomposition_method='basis'),
+                             epochs=500, learning_rate=0.05, seed=42, n_decomp=20, decomposition_method='block'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
@@ -149,16 +148,24 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
     return train_step
 
 
-def train(model: Optional[str] = None, dataset: Optional[str] = None):
+def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    jax.config.update('jax_platform_name', 'cpu')
     logging.basicConfig(filename='logs.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     logging.info('-' * 50)
-    dataset = LinkPredictionWrapper.load_fb15k_237()
-    # dataset = LinkPredictionWrapper.load_wordnet18()
-    logging.info(dataset.name)
+    if dataset_name is None:
+        dataset = LinkPredictionWrapper.load_fb15k()
+    else:
+        dataset = LinkPredictionWrapper.load_str(dataset_name)
 
-    model_config = model_configs['rgcn']
+    logging.info(f'Dataset: {dataset.name}')
+
+    if model_name is None:
+        model_config = model_configs['distmult']
+    else:
+        model_config = model_configs[model_name]
+
     model_init_key, key = jrandom.split(jrandom.PRNGKey(model_config.seed))
     model = model_config.get_model(n_nodes=dataset.num_nodes, n_relations=dataset.num_relations, key=model_init_key)
 
@@ -172,7 +179,6 @@ def train(model: Optional[str] = None, dataset: Optional[str] = None):
 
     num_epochs = model_config.epochs  # and 1
 
-    pbar = trange(num_epochs)
     pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
     num_nodes = dataset.num_nodes
 
@@ -203,16 +209,17 @@ def train(model: Optional[str] = None, dataset: Optional[str] = None):
     best_val_mrr = 0.0
 
     try:
+        pbar = trange(num_epochs, dynamic_ncols=True)
         for i in pbar:
             train_key, key = jrandom.split(key)
             model, opt_state, loss, val_mrr = train_step(model=model, opt_state=opt_state, key=train_key)
 
             if val_mrr > best_val_mrr:
-                logging.info(f'New best model found at epoch {i} with val_mrr {val_mrr}')
+                logging.info(f'\nNew best model found at epoch {i} with val_mrr {val_mrr}')
                 best_val_mrr = val_mrr
                 best_model = model
 
-            pbar.set_description(f'\tLoss: {loss}, val_mrr: {val_mrr}')
+            pbar.set_description(f'Loss: {loss}, val_mrr: {val_mrr}')
             pbar.refresh()
             if hasattr(model, 'alpha'):
                 object.__setattr__(model, 'alpha', jnp.clip(model.alpha, 0, 1))

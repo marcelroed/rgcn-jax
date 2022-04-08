@@ -81,7 +81,7 @@ class RGCNEncoder(eqx.Module, Encoder):
 
         if decomposition_method == 'block':
             print('Using pre_transform matrix')
-            self.pre_transform = jax.nn.initializers.normal()(key2, (n_nodes, 500))
+            self.pre_transform = jax.nn.initializers.normal()(key2, (n_nodes, hidden_channels[0]))
         else:
             self.pre_transform = None
 

@@ -155,7 +155,7 @@ def main(dataset_name: str, seed):
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
-    logging.info(f'Running experiment with dataset: {dataset_name}, seed: {seed}')
+    logging.info(f'Running experiment with dataset: {dataset_name.upper()}, seed: {seed}')
     dataset = EntityClassificationWrapper.load_dataset(dataset_name.upper())
     results = run_experiment(dataset, seed)
     logging.info(pformat(results))
