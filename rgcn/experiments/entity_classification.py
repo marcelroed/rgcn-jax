@@ -18,6 +18,7 @@ from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
 from rgcn.models.classifier import RGCNClassifier
 
 warnings.simplefilter('ignore', FutureWarning)  # Ignore tree_multimap deprecation warnings
+warnings.simplefilter('ignore', UserWarning)  # Ignore tree_multimap deprecation warnings
 
 
 def make_model(dataset, seed):
@@ -182,7 +183,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    dataset = EntityClassificationWrapper.load_dataset('AIFB')
+    dataset = EntityClassificationWrapper.load_dataset('BGS')
     results = []
     try:
         for i in trange(10, desc='Running models with different seeds'):
