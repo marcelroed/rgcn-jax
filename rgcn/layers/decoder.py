@@ -106,9 +106,8 @@ class ComplEx(eqx.Module, Decoder):
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
         key1, key2 = random.split(key, 2)
-        self.weights_r = jax.nn.initializers.normal()(key1, (n_relations, n_channels))
-        self.weights_i = jax.nn.initializers.normal()(key2, (n_relations, n_channels))
-        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+        self.weights_r = jax.nn.initializers.glorot_normal()(key1, (n_relations, n_channels))
+        self.weights_i = jax.nn.initializers.glorot_normal()(key2, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
         # x: [n_nodes, 2, n_channels] -- first real, then imaginary
@@ -191,9 +190,8 @@ class SimplE(eqx.Module, Decoder):
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
         key1, key2 = random.split(key, 2)
-        self.weights = jax.nn.initializers.normal()(key1, (n_relations, n_channels))
-        self.weights_inv = jax.nn.initializers.normal()(key2, (n_relations, n_channels))
-        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
+        self.weights = jax.nn.initializers.glorot_normal()(key1, (n_relations, n_channels))
+        self.weights_inv = jax.nn.initializers.glorot_normal()(key2, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
         # x: [n_nodes, 2, n_channels] -- first head vectors, then tail vectors
@@ -228,14 +226,8 @@ class RESCAL(eqx.Module, Decoder):
         self.n_relations = n_relations
         self.n_channels = n_channels
         self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels, n_channels))
-        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
-        # O(n_edges * n_channels) to compute
-        # x: [n_nodes, n_channels]
-        # edge_type_idcs: [n_relations, 2, n_edges_per_relation_max]
-        # edge_type_idcs_mask: [n_edges_per_relation_max]
-
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
         s = s / jnp.linalg.norm(s, axis=1, keepdims=True)
         o = x[edge_index[1, :]]  # [n_edges, n_channels]
@@ -265,7 +257,6 @@ class TransE(eqx.Module, Decoder):
     def __init__(self, n_relations, n_channels, key):
         self.n_relations = n_relations
         self.weights = jax.nn.initializers.normal()(key, (n_relations, n_channels))
-        # self.weights = jax.nn.initializers.glorot_uniform()(key, (n_relations, n_channels))
 
     def __call__(self, x, edge_index, edge_type):
         s = x[edge_index[0, :]]  # [n_edges, n_channels]
