@@ -16,6 +16,7 @@ dependencies:
     - torch-cluster -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
     - torch-spline-conv -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
     - torch-geometric -f https://data.pyg.org/whl/torch-1.11.0+cpu.html
+  - rich
   - pytorch
   - ca-certificates
   - openssl
