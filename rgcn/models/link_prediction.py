@@ -127,12 +127,12 @@ class GenericShallowModel(eqx.Module, BaseModel):
 class TransEModel(GenericShallowModel):
     @dataclass
     class Config(GenericShallowModel.Config):
-        margin: int
+        margin: float
 
         def get_model(self, n_nodes, n_relations, key):
             return TransEModel(self, n_nodes, n_relations, key)
 
-    margin: int
+    margin: float
 
     def __init__(self, config: Config, n_nodes, n_relations, key):
         assert (config.decoder_class == TransE)
