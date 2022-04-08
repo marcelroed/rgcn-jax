@@ -1,10 +1,9 @@
+import time
 from contextlib import contextmanager
 from typing import Union
 
 import jax.numpy as jnp
-
 from joblib import Memory
-import time
 
 __all__ = ['memory']
 

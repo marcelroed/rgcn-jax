@@ -1,19 +1,18 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Union
-from typing_extensions import Literal
-
-import optax
-from jax_dataclasses import pytree_dataclass
+from warnings import warn
 
 import equinox as eqx
-import jax.random as jrandom
 import jax.numpy as jnp
+import jax.random as jrandom
+import optax
+from jax_dataclasses import pytree_dataclass
+from typing_extensions import Literal
 
+from rgcn.data.utils import BaseConfig
 from rgcn.layers.decoder import Decoder, TransE, SimplE, ComplEx
 from rgcn.layers.encoder import DirectEncoder, RGCNEncoder, Encoder
-from rgcn.data.utils import BaseConfig
-from warnings import warn
-from abc import ABC, abstractmethod
 
 
 def safe_log(x, eps=1e-15):

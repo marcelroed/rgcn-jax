@@ -1,10 +1,11 @@
 import gc
 from typing import Optional
 
-import numpy as np
-from torch_geometric.datasets.entities import Entities
-from attrs import define
 import jax.numpy as jnp
+import numpy as np
+from attrs import define
+from torch_geometric.datasets.entities import Entities
+
 from rgcn.data.utils import torch_to_jax
 
 
@@ -58,7 +59,8 @@ class EntityClassificationWrapper:
             test_idx=test_idx,
             test_y=test_y,
         )
-        del np_padded; del np_masks
+        del np_padded;
+        del np_masks
         gc.collect()
 
         return instance
@@ -78,7 +80,9 @@ def make_dense_relation_tensor(num_relations, edge_index, edge_type):
              ml in mask_lengths]
     np_mask = np.stack(masks, axis=0)
     np_padded = np.stack(padded, axis=0)
-    del padded; del masks; gc.collect()
+    del padded;
+    del masks;
+    gc.collect()
     return np_padded, np_mask
 
 

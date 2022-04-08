@@ -1,11 +1,12 @@
 from typing import Optional
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import jax.random as jrandom
 from typing_extensions import Literal
 
 from rgcn.layers.rgcn import RGCNConv
-import equinox as eqx
-import jax.random as jrandom
-import jax
-import jax.numpy as jnp
 
 
 class RGCNClassifier(eqx.Module):

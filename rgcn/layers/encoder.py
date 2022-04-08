@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import Optional
-from typing_extensions import Literal
 
 import equinox as eqx
-from jax import random as jrandom
 import jax
 from jax import numpy as jnp
+from jax import random as jrandom
+from typing_extensions import Literal
 
 from rgcn.layers.rgcn import RGCNConv
 
@@ -61,7 +61,8 @@ class RGCNEncoder(eqx.Module, Encoder):
 
     def __init__(self, hidden_channels, edge_dropout_rate: float, node_dropout_rate: float,
                  normalizing_constant: Literal['per_relation_node', 'per_node', 'none'],
-                 decomposition_method: Literal['basis', 'block', 'none'], n_decomp: int, n_nodes: int, n_relations: int, key):
+                 decomposition_method: Literal['basis', 'block', 'none'], n_decomp: int, n_nodes: int, n_relations: int,
+                 key):
         super().__init__()
         key1, key2 = jrandom.split(key)
         self.dropout_rate = edge_dropout_rate

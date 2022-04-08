@@ -1,6 +1,8 @@
 import logging
 import pickle
 import sys
+import warnings
+from pprint import pformat
 from statistics import mean, stdev
 
 import equinox as eqx
@@ -11,15 +13,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optax
 from tqdm import trange
-from pprint import pformat
 
 from rgcn.data.datasets.entity_classification import EntityClassificationWrapper
 from rgcn.models.classifier import RGCNClassifier
 
-import warnings
-
-
-warnings.simplefilter('ignore', FutureWarning)
+warnings.simplefilter('ignore', FutureWarning)  # Ignore tree_multimap deprecation warnings
 
 
 def make_model(dataset, seed):
@@ -70,6 +68,7 @@ def softmax_loss(logits, y):
 @eqx.filter_jit
 @eqx.filter_value_and_grad
 def loss_fn(model, x, edge_type_idcs, edge_masks, y_idx, y):
+    """Complete loss function returning both loss and gradients with respect to the model parameters."""
     logits = model(x, edge_type_idcs, edge_masks)[y_idx]  # (num_nodes, num_classes)
     loss = softmax_loss(logits, y)
     loss = loss + model.l2_loss()
@@ -114,7 +113,9 @@ def train_model(model, optimizer: optax.GradientTransformation, dataset: EntityC
             updates, opt_state = optimizer.update(grads, opt_state)
             val_loss, val_acc = test_results(model, x, edge_type_idcs, dataset.edge_masks_by_type, dataset.val_idx,
                                              dataset.val_y)
-            losses.append(loss); val_losses.append(val_loss); val_accs.append(val_acc)
+            losses.append(loss);
+            val_losses.append(val_loss);
+            val_accs.append(val_acc)
             model = eqx.apply_updates(model, updates)
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
@@ -164,7 +165,7 @@ def run_experiment(dataset, seed):
 
 def main(dataset_name: str, seed):
     """Entry point for CLI"""
-    jax.config.update("jax_platform_name", "cpu")
+    jax.config.update("jax_platform_name", "cpu")  # Always run on CPU
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
@@ -177,10 +178,11 @@ def main(dataset_name: str, seed):
 
 if __name__ == '__main__':
     # When running as a script we run several instances of the experiment specified below and report aggregates
+    jax.config.update("jax_platform_name", "cpu")  # Always run on CPU
 
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    dataset = EntityClassificationWrapper.load_dataset('MUTAG')
+    dataset = EntityClassificationWrapper.load_dataset('AIFB')
     results = []
     try:
         for i in trange(10, desc='Running models with different seeds'):
@@ -195,7 +197,7 @@ if __name__ == '__main__':
     logging.info(f'Std of test accuracies {stdev(results["test_acc"])}')
     logging.info(f'Max of test accuracies {max(results["test_acc"])}')
     logging.info(f'Min of test accuracies {min(results["test_acc"])}')
-    logging.info(pformat(results))
+    logging.info(results)
 
     with open(f'{dataset.name.lower()}_results.pkl', 'wb') as f:
         pickle.dump(results, f)

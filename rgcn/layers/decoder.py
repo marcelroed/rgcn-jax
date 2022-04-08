@@ -1,9 +1,10 @@
+from abc import ABC, abstractmethod
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as random
 import numpy as np
-from abc import ABC, abstractmethod
 
 
 class Decoder(ABC):
@@ -55,7 +56,7 @@ class DistMult(eqx.Module, Decoder):
         return jnp.sum(s * r * o, axis=1)
         # return jnp.einsum('ec,ec,ec->e', s, r, o)
 
-    #def call_dense(self, x, rel_edge_index, rel_edge_mask):
+    # def call_dense(self, x, rel_edge_index, rel_edge_mask):
     #    n_relations, _, max_edges_per_relation = rel_edge_index.shape
     #    # rel_edge_index: [n_relations, 2, max_edges_per_relation]
     #
@@ -159,6 +160,7 @@ def test_complex():
     s, r, o = x_[edge_index[0, :], :], complex_weights[edge_type, :], x_[edge_index[1, :], :]
     result = np.sum(s * r * np.conj(o), axis=1).real
     print(result)
+
 
 def test_complex():
     compl = ComplEx(n_relations=2, n_channels=2, key=random.PRNGKey(0))

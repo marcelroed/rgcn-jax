@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import gc
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Tuple, Optional
 
+import chex
 import numpy as np
 import torch
-import chex
-from dataclasses import dataclass
 from jax import numpy as jnp
 from tqdm import trange
 
-from rgcn.utils import memory
-from collections.abc import Callable
 from rgcn.layers.decoder import Decoder
+from rgcn.utils import memory
 
 
 def torch_to_jax(tensor):
@@ -104,3 +104,11 @@ class BaseConfig:
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.name})'
+
+
+def get_data_triples(dataset, idx):
+    """Merge edge_index and edge_type into triples of (head, tail, relation_type)"""
+    val_edge_index = dataset.edge_index[:, idx]
+    val_edge_type = dataset.edge_type[idx]
+    val_data = jnp.concatenate((val_edge_index, val_edge_type.reshape(1, -1)), axis=0)
+    return val_data

@@ -1,13 +1,14 @@
 import os
 from typing import Optional, Callable, List
 
+import jax.numpy as jnp
 import torch
 from attrs import define
-import jax.numpy as jnp
+from jax_dataclasses import pytree_dataclass
 from torch_geometric.data import InMemoryDataset, download_url, Data
 from torch_geometric.datasets import WordNet18, WordNet18RR
+
 from rgcn.data.utils import torch_to_jax
-from jax_dataclasses import pytree_dataclass
 
 
 class CustomDataset(InMemoryDataset):
