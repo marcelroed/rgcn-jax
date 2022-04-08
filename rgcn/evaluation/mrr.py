@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -11,6 +12,7 @@ from jax import numpy as jnp
 from tqdm import trange
 from typing_extensions import Literal
 
+from rgcn.data.datatypes import BasicModelData
 from rgcn.utils import memory
 from rgcn.utils._utils import time_block
 from rgcn.utils.algorithms import parallel_argsort_last
@@ -81,6 +83,14 @@ class MRRResults:
             hits_at_3=(self.hits_at_3 + other.hits_at_3) / 2,
             hits_at_10=(self.hits_at_10 + other.hits_at_10) / 2
         )
+
+    @classmethod
+    def from_head(cls, head_hrt_scores, test_data: BasicModelData, force_cpu=False):
+        return mean_reciprocal_rank_and_hits(head_hrt_scores, test_data.edge_index, 'head', force_cpu=force_cpu)
+
+    @classmethod
+    def from_tail(cls, tail_hrt_scores, test_data: BasicModelData, force_cpu=False):
+        return mean_reciprocal_rank_and_hits(tail_hrt_scores, test_data.edge_index, 'tail', force_cpu=force_cpu)
 
     @classmethod
     def generate_from(cls, head_hrt_scores, tail_hrt_scores, test_edge_index, force_cpu=False):
@@ -182,20 +192,41 @@ def mean_reciprocal_rank_and_hits(hrt_scores, test_edge_index, corrupt: Literal[
         return MRRResults(mrr, hits_at_1=hits1, hits_at_3=hits3, hits_at_10=hits10)
 
 
-def generate_unfiltered_mrr(num_nodes, model, test_data, all_data, force_cpu=False):
+@partial(jax.jit, static_argnums=3)
+def val_unfiltered_mrr(model, train_data: BasicModelData, val_data: BasicModelData, num_nodes):
+    """Function to generate unfiltered MRR as used for validation"""
+    batch_dim = [i for i in range(1, 10) if train_data.num_edges % i == 0][-1]
+    val_triples = val_data.fused
+    generate_logits = make_generate_logits(model, num_nodes, train_data, batch_dim=batch_dim)
+
+    head_corrupt_scores = generate_logits(val_triples, mode='head')
+    head_mrr = MRRResults.from_head(head_corrupt_scores, val_data)
+    del head_corrupt_scores
+
+    tail_corrupt_scores = generate_logits(val_triples, mode='tail')
+    tail_mrr = MRRResults.from_tail(tail_corrupt_scores, val_data)
+
+    return head_mrr.average_with(tail_mrr).mrr
+
+
+def generate_unfiltered_mrr(num_nodes, model, all_data: BasicModelData, train_idx, test_idx, force_cpu=False):
     """Generate the MRR with no filtering."""
-    batch_dim = [i for i in range(1, 10) if test_data.shape[1] % i == 0][-1]
+    batch_dim = [i for i in range(1, 10) if test_idx.shape[0] % i == 0][-1]
     logging.info(f'Using a batch_dim of {batch_dim} for generating logits')
+
+    train_data = all_data[train_idx]  # train data is needed to produce node embeddings
+    test_data = all_data[test_idx]
+
+    test_triples = test_data.fused
+
     with time_block('Unfiltered MRR'):
+        generate_logits = make_generate_logits(model, num_nodes, train_data, batch_dim=batch_dim)
         with time_block('Computing head scores'):
-            head_corrupt_scores = make_generate_logits(model, num_nodes, all_data, batch_dim=batch_dim,
-                                                       mode='head')(test_data)
+            head_corrupt_scores = generate_logits(test_triples, mode='head')
         with time_block('Computing tail scores'):
-            tail_corrupt_scores = make_generate_logits(model, num_nodes, all_data, batch_dim=batch_dim,
-                                                       mode='tail')(test_data)
+            tail_corrupt_scores = generate_logits(test_triples, mode='tail')
         with time_block('Computing MRR'):
-            test_edge_index = test_data[:2, :]
-            unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_edge_index,
+            unfiltered_results = MRRResults.generate_from(head_corrupt_scores, tail_corrupt_scores, test_data.edge_index,
                                                           force_cpu=force_cpu)
     return head_corrupt_scores, tail_corrupt_scores, unfiltered_results
 
@@ -219,7 +250,7 @@ def filter_scores(scores, mask):
     return scores.at[mask].set(-jnp.inf)
 
 
-def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal['head', 'tail'] = 'head'):
+def make_generate_logits(model, num_nodes, all_data, batch_dim=5):
     """
     Construct a JIT-ed function to generate scores for a set of test edges.
     Node embeddings are precomputed and captured by the returned function.
@@ -232,7 +263,7 @@ def make_generate_logits(model, num_nodes, all_data, batch_dim=5, mode: Literal[
     node_embeddings = eqx.filter_jit(model.get_node_embeddings)(all_data)  # [n_nodes, embedding_dim]
 
     @eqx.filter_jit
-    def generate_logits(test_data):
+    def generate_logits(test_data, mode: Literal['head', 'tail'] = 'head'):
         test_data = jnp.transpose(test_data)
 
         # test_data: [n_test_edges, 3]

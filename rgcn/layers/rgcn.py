@@ -12,6 +12,7 @@ from typing_extensions import Literal
 
 
 # jax.config.update('jax_log_compiles', True)
+from rgcn.data.datatypes import BasicModelData
 
 
 class RelLinear(eqx.Module):
@@ -224,6 +225,43 @@ class RGCNConv(eqx.Module):
 
         return out
 
+    def call_with_edge_idx(self, x, data: BasicModelData, key):
+        # x: [num_nodes, in_channels]
+        # edge_idx: [2, num_edges]
+        # edge_type: [num_edges,]
+        edge_idx = data.edge_index
+        edge_type = data.edge_type
+
+        out = self.get_self_transform(x, key)
+
+        # [n_relations,]
+        relations = jnp.arange(self.n_relations)
+
+        if x is None:
+            # relation_points: [n_relations, num_points, out_channels]
+            relation_points = jax.vmap(self.relation_weights.apply_id, in_axes=0)(relations)
+        else:
+            # Aggregate within each relation
+            num_points = x.shape[0]
+
+            # [n_relations, num_points, in_channels]
+            relation_sum = jnp.zeros((self.n_relations, num_points, self.in_channels), dtype=jnp.float32) \
+                              .at[edge_idx[1], edge_type, :].add(x[edge_idx[0]])
+
+            # relation_points: [n_relations, num_points, out_channels]
+            relation_points = jax.vmap(self.relation_weights.apply, in_axes=(0, 0), out_axes=0)(relations, relation_sum)
+
+        # [num_nodes, out_channels]
+        out = out + jnp.sum(relation_points, axis=0)
+
+        return out
+
+
+
+
+
+
+
     # def single_relation(self, x, edge_idx, rel):
     #     out = self.get_self_transform(x)
     #
@@ -259,6 +297,16 @@ def test_rgcn_none():
     edge_type = jnp.array([0, 0, 1, 1, 1])
     rgcn = RGCNConv(3, 2, 2, jrandom.PRNGKey(0))
     out = rgcn(x, edge_index, edge_type)
+    print(out)
+
+
+def test_rgcn_edge_idx():
+    x = jnp.array([1, 2, 3], dtype=float).reshape(1, -1).repeat(5, axis=0)
+    edge_idx = jnp.array([[0, 1, 2, 3, 4], [1, 2, 3, 4, 0]])
+    edge_type = jnp.array([0, 0, 1, 1, 1])
+    rgcn = RGCNConv(3, 2, 2, decomposition_method='none', n_decomp=0, normalizing_constant='none',
+                    key=jrandom.PRNGKey(0), dropout_rate=None)
+    out = jax.jit(rgcn.call_with_edge_idx)(x, edge_idx, edge_type, jrandom.PRNGKey(0))
     print(out)
 
 

@@ -12,7 +12,7 @@ from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.data.utils import encode, encode_with_type, make_dense_relation_neighbors
 from rgcn.layers.decoder import Decoder
-from rgcn.models.link_prediction import RGCNModelTrainingData
+# from rgcn.data.datatypes import RGCNModelTrainingData
 
 
 def negative_sample(edge_index, num_nodes, num_negatives, key):
@@ -205,3 +205,17 @@ def save_model(model, model_config):
     flattened_model = jax.tree_util.tree_flatten(model)
     with open(f'{model_config.name}_model', 'wb') as f:
         pickle.dump(flattened_model[0], f)
+
+
+def make_rgcn_data(num_relations, pos_edge_index, pos_edge_type):
+    """
+    Construct training data for RGCN models.
+    See `RGCNModelTrainingData` for more details.
+    """
+    complete_pos_edge_index = jnp.concatenate((pos_edge_index, jnp.flip(pos_edge_index, axis=0)), axis=1)
+    complete_pos_edge_type = jnp.concatenate((pos_edge_type, pos_edge_type + num_relations))
+    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=2 * num_relations,
+                                                            edge_index=complete_pos_edge_index,
+                                                            edge_type=complete_pos_edge_type)
+    all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
+    return all_data

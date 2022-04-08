@@ -12,59 +12,47 @@ import jax.random as jrandom
 import optax
 from tqdm import trange
 
-from rgcn.data.datasets.entity_classification import make_dense_relation_tensor
 from rgcn.data.datasets.link_prediction import LinkPredictionWrapper
 from rgcn.data.sampling import make_dense_batched_negative_sample
 from rgcn.data.utils import get_data_triples
 from rgcn.evaluation.mrr import generate_unfiltered_mrr, generate_filtered_mrr
 from rgcn.layers.decoder import DistMult, ComplEx, SimplE, TransE, RESCAL
 from rgcn.models.link_prediction import GenericShallowModel, TransEModel, RGCNModel, \
-    RGCNModelTrainingData, BasicModelData, CombinedModel, DoubleRGCNModel, LearnedEnsembleModel
+    CombinedModel, DoubleRGCNModel, LearnedEnsembleModel
+from rgcn.data.datatypes import BasicModelData  # , RGCNModelTrainingData
 
 jax.config.update('jax_log_compiles', False)
 
 
-def make_rgcn_data(num_relations, pos_edge_index, pos_edge_type):
-    """
-    Construct training data for RGCN models.
-    See `RGCNModelTrainingData` for more details.
-    """
-    complete_pos_edge_index = jnp.concatenate((pos_edge_index, jnp.flip(pos_edge_index, axis=0)), axis=1)
-    complete_pos_edge_type = jnp.concatenate((pos_edge_type, pos_edge_type + num_relations))
-    dense_relation, dense_mask = make_dense_relation_tensor(num_relations=2 * num_relations,
-                                                            edge_index=complete_pos_edge_index,
-                                                            edge_type=complete_pos_edge_type)
-    all_data = RGCNModelTrainingData(jnp.asarray(dense_relation), jnp.asarray(dense_mask))
-    return all_data
-
-
-def make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, num_nodes):
+def make_get_epoch_train_data_edge_index(all_data: BasicModelData, pos_idx: jnp.ndarray, num_nodes: int):
     """Setup sampling for training data."""
-    dense_batched_negative_sample = make_dense_batched_negative_sample(edge_index=pos_edge_index,
-                                                                       num_nodes=num_nodes,
-                                                                       num_edges=pos_edge_index.shape[1])
+    dense_batched_negative_sample = make_dense_batched_negative_sample(all_data=all_data,
+                                                                       pos_idx=pos_idx,
+                                                                       num_nodes=num_nodes,)
 
     @jax.jit
     def perform(key):
+        pos_data = all_data[pos_idx]
+
         neg_edge_index = dense_batched_negative_sample(key=key)
-        neg_edge_type = pos_edge_type
+        neg_edge_type = pos_data.edge_type
 
-        full_edge_index = jnp.concatenate((pos_edge_index, neg_edge_index), axis=-1)
-        full_edge_type = jnp.concatenate((pos_edge_type, neg_edge_type), axis=-1)
+        full_edge_index = jnp.concatenate((pos_data.edge_index, neg_edge_index), axis=-1)
+        full_edge_type = jnp.concatenate((pos_data.edge_type, neg_edge_type), axis=-1)
 
-        pos_mask = jnp.concatenate((jnp.ones_like(pos_edge_type), jnp.zeros_like(neg_edge_type)))
+        pos_mask = jnp.concatenate((jnp.ones_like(pos_data.edge_type), jnp.zeros_like(neg_edge_type)))
 
         return BasicModelData(full_edge_index, full_edge_type), pos_mask
 
     return perform
 
 
-@eqx.filter_jit
+# @eqx.filter_jit
 @eqx.filter_value_and_grad
-def loss_fn(model, all_data: RGCNModelTrainingData, data: BasicModelData, mask, key):
+def loss_fn(model, train_data: BasicModelData, sampled_data: BasicModelData, mask, key):
     """Complete loss function with gradients computed for all parameters of the model."""
-    return model.loss(data.edge_index, data.edge_type, mask, all_data, key=key) + model.l2_loss() / (
-            2 * data.edge_index.shape[1])
+    return model.loss(train_data, sampled_data, mask, key=key) + model.l2_loss() / (
+            2 * train_data.edge_index.shape[1])
 
 
 model_configs = {
@@ -83,9 +71,9 @@ model_configs = {
     'transe': TransEModel.Config(decoder_class=TransE, n_channels=50, margin=2, l2_reg=None, name='TransE',
                                  n_embeddings=1, normalization=True,
                                  epochs=1000, learning_rate=0.01, seed=42),
-    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[100, 100, 100], normalizing_constant='per_node',
+    'rgcn': RGCNModel.Config(decoder_class=DistMult, hidden_channels=[200], normalizing_constant='per_node',
                              edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
-                             epochs=500, learning_rate=0.05, seed=42, n_decomp=20, decomposition_method='block'),
+                             epochs=500, learning_rate=0.05, seed=42, n_decomp=2, decomposition_method='basis'),
     'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
                                      edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
                                      epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
@@ -110,7 +98,7 @@ model_configs = {
 }
 
 
-def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast):
+def make_train_step(num_nodes, optimizer, val_idx, get_train_epoch_data_fast, all_data, train_idx):
     @eqx.filter_jit
     def train_step(*, model, opt_state, key):
         """
@@ -118,14 +106,15 @@ def make_train_step(num_nodes, all_data, optimizer, val_data, get_train_epoch_da
         validation MRR.
         """
         data_key, model_key = jrandom.split(key)
-        train_data, pos_mask = get_train_epoch_data_fast(key=data_key)
+        sampled_data, pos_mask = get_train_epoch_data_fast(key=data_key)
 
-        loss, grads = loss_fn(model, all_data, train_data, pos_mask, key=model_key)
+        train_data = all_data[train_idx]
+
+        loss, grads = loss_fn(model, train_data, sampled_data, pos_mask, key=model_key)
         updates, opt_state = optimizer.update(grads, opt_state)
 
         model = eqx.apply_updates(model, updates)
-        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes=num_nodes, model=model, test_data=val_data,
-                                                        all_data=all_data)
+        _, _, val_mrr_results = generate_unfiltered_mrr(num_nodes=num_nodes, model=model, all_data=all_data[train_idx], train_idx=train_idx, test_idx=val_idx,)
         return model, opt_state, loss, val_mrr_results.mrr
 
     return train_step
@@ -152,7 +141,7 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
     logging.info(f'Dataset: {dataset.name}')
 
     if model_name is None:
-        model_config = model_configs['distmult']
+        model_config = model_configs['rgcn']
     else:
         model_config = model_configs[model_name]
 
@@ -163,16 +152,16 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
     logging.info(str(model_config))
     logging.info(str(model))
 
-    val_data = get_data_triples(dataset, dataset.val_idx)
+    all_data = BasicModelData.from_data(dataset.edge_index, dataset.edge_type)
 
-    pos_edge_index, pos_edge_type = dataset.edge_index[:, dataset.train_idx], dataset.edge_type[dataset.train_idx]
+    pos_data = all_data[dataset.train_idx]
 
     # Data used for learning node embeddings transforms for RGCN. This format is different for efficiency reasons.
-    all_data = make_rgcn_data(dataset.num_relations, pos_edge_index, pos_edge_type)
+    # all_data = make_rgcn_data(dataset.num_relations, pos_edge_index, pos_edge_type)
 
-    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(pos_edge_index, pos_edge_type, dataset.num_nodes)
+    get_train_epoch_data_fast = make_get_epoch_train_data_edge_index(all_data, pos_idx=dataset.train_idx, num_nodes=dataset.num_nodes)
 
-    train_step = make_train_step(dataset.num_nodes, all_data, optimizer, val_data, get_train_epoch_data_fast)
+    train_step = make_train_step(dataset.num_nodes, optimizer, dataset.val_idx, get_train_epoch_data_fast, all_data, train_idx=dataset.train_idx)
 
     best_model = None
     best_val_mrr = 0.0
@@ -201,7 +190,7 @@ def train(model_name: Optional[str] = None, dataset_name: Optional[str] = None):
 
     logging.info(f'Final loss: {loss}')
 
-    del val_data, train_step, get_train_epoch_data_fast, opt_state, loss, val_mrr
+    del train_step, get_train_epoch_data_fast, opt_state, loss, val_mrr
     gc.collect()
 
     model = best_model  # Use the model with the best validation MRR

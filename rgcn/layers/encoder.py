@@ -8,6 +8,7 @@ from jax import random as jrandom
 from typing_extensions import Literal
 
 from rgcn.layers.rgcn import RGCNConv
+from rgcn.data.datatypes import BasicModelData
 
 
 class Encoder(ABC):
@@ -86,21 +87,21 @@ class RGCNEncoder(eqx.Module, Encoder):
         else:
             self.pre_transform = None
 
-    def __call__(self, all_data, key):
+    def __call__(self, data: BasicModelData, key):
         dropout_key, key = jrandom.split(key)
-        dropout_all_data = all_data.dropout(self.dropout_rate, dropout_key)
+        dropout_data = data.dropout(self.dropout_rate, dropout_key)
 
         x = self.pre_transform  # May be None
 
         for layer in self.rgcns:
             layer_key, key = jrandom.split(key)
-            x = jax.nn.relu(layer(x, dropout_all_data.edge_type_idcs, dropout_all_data.edge_masks, layer_key))
+            x = jax.nn.relu(layer.call_with_edge_idx(x, dropout_data, layer_key))
         return x
 
-    def get_node_embeddings(self, all_data):
+    def get_node_embeddings(self, all_data: BasicModelData):
         x = self.pre_transform  # May be None
         for layer in self.rgcns:
-            x = jax.nn.relu(layer(x, all_data.edge_type_idcs, all_data.edge_masks, key=None))
+            x = jax.nn.relu(layer.call_with_edge_idx(x, all_data, key=None))
         return x
 
     def normalize(self):

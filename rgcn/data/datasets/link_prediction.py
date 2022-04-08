@@ -112,9 +112,9 @@ class LinkPredictionWrapper:
         num_relations = jnp.max(edge_type).item() + 1
         num_nodes = dataset.num_nodes
         num_edges = edge_type.shape[0]
-        train_idx = torch_to_jax(dataset.train_mask)
-        val_idx = torch_to_jax(dataset.val_mask)
-        test_idx = torch_to_jax(dataset.test_mask)
+        train_idx = torch_to_jax(torch.arange(dataset.train_mask.shape[0])[dataset.train_mask])
+        val_idx = torch_to_jax(torch.arange(dataset.train_mask.shape[0])[dataset.val_mask])
+        test_idx = torch_to_jax(torch.arange(dataset.test_mask.shape[0])[dataset.test_mask])
         return cls(
             name=name,
             num_nodes=num_nodes,

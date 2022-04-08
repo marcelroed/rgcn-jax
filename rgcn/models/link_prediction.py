@@ -1,15 +1,14 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Union
-from warnings import warn
 
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jrandom
 import optax
-from jax_dataclasses import pytree_dataclass
 from typing_extensions import Literal
 
+from rgcn.data.datatypes import BasicModelData  #, RGCNModelTrainingData
 from rgcn.data.utils import BaseConfig
 from rgcn.layers.decoder import Decoder, TransE, SimplE, ComplEx
 from rgcn.layers.encoder import DirectEncoder, RGCNEncoder, Encoder
@@ -29,20 +28,6 @@ def cross_entropy_loss(x, y):
 def margin_ranking_loss(scores_pos, scores_neg, gamma):
     final = jnp.clip(gamma - scores_pos + scores_neg, 0, None)
     return jnp.sum(final)
-
-
-@pytree_dataclass
-class BasicModelData:
-    """Only stores edge_index and edge_type"""
-    edge_index: jnp.ndarray
-    edge_type: jnp.ndarray
-
-    is_dense = False
-
-    @classmethod
-    def from_data(cls, edge_index, edge_type, **kwargs):
-        warn(f'Not using additional parameters: {", ".join(kwargs.keys())} in {cls.__name__}')
-        return cls(edge_index=edge_index, edge_type=edge_type)
 
 
 class BaseModel(ABC):
@@ -145,30 +130,6 @@ class TransEModel(GenericShallowModel):
         return margin_ranking_loss(scores_pos, scores_neg, self.margin)
 
 
-@pytree_dataclass
-class RGCNModelTrainingData:
-    """Has extensions for the RGCN model"""
-
-    edge_type_idcs: jnp.ndarray
-    "A dense tensor of shape (n_relations, 2, max_edges_per_relation) containing padded edge indices for each relation"
-
-    edge_masks: jnp.ndarray
-    "Masks to indicate where the edge indices are valid, of shape (n_relations, max_edges_per_relation)"
-
-    is_dense = True
-
-    @classmethod
-    def from_data(cls, edge_type_idcs, edge_masks):
-        # edge_type_idcs, edge_masks = make_dense_relation_edges(edge_index, edge_type, n_relations)
-        return cls(edge_type_idcs, edge_masks)
-
-    def dropout(self, p: float, key):
-        if p is None:
-            return self
-        return self.__class__(self.edge_type_idcs,
-                              self.edge_masks * jrandom.bernoulli(key, p, self.edge_masks.shape))
-
-
 class RGCNModel(eqx.Module, BaseModel):
     l2_reg: Optional[float]
     encoder: RGCNEncoder
@@ -196,12 +157,12 @@ class RGCNModel(eqx.Module, BaseModel):
                                    n_relations, key1)
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], normalize=False, key=key2)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+    def __call__(self, train_data: BasicModelData, sampled_data: BasicModelData, key):
         # Get the embeddings for nodes using the encoder
-        embeddings = self.encoder(all_data, key)
+        embeddings = self.encoder(train_data, key)
 
         # Use the decoder with the embeddings to get scores for the input edges
-        scores = self.decoder(embeddings, edge_index, rel)
+        scores = self.decoder(embeddings, sampled_data)
 
         return scores
 
@@ -217,8 +178,8 @@ class RGCNModel(eqx.Module, BaseModel):
     def forward_tails(self, node_embeddings, relation_type, head):
         return self.decoder.forward_tails(node_embeddings[head], relation_type, node_embeddings)
 
-    def loss(self, edge_index, edge_type, mask, all_data, key):
-        scores = self(edge_index, edge_type, all_data, key=key)
+    def loss(self, train_data: BasicModelData, sampled_data: BasicModelData, mask, key):
+        scores = self(train_data, sampled_data, key=key)
         return cross_entropy_loss(scores, mask)
 
     def l2_loss(self):
@@ -277,7 +238,7 @@ class CombinedModel(eqx.Module, BaseModel):
         assert (config.decoder_class in [SimplE, ComplEx])
         self.decoder = config.decoder_class(n_relations, last_layer_channels // 2, key2)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+    def __call__(self, edge_index, rel, all_data, key):
         embeddings = self.encoder(all_data, key)  # [n_nodes, num_channels]
         num_channels = embeddings.shape[1]
         combined = jnp.stack(
@@ -344,7 +305,7 @@ class DoubleRGCNModel(eqx.Module, BaseModel):
         assert (config.decoder_class in [SimplE, ComplEx])
         self.decoder = config.decoder_class(n_relations, config.hidden_channels[-1], key3)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+    def __call__(self, edge_index, rel, all_data, key):
         key1, key2 = jrandom.split(key, 2)
         embeddings1 = self.encoder1(all_data, key1)
         embeddings2 = self.encoder2(all_data, key2)
@@ -404,7 +365,7 @@ class LearnedEnsembleModel(eqx.Module, BaseModel):
         self.decoder2 = config.decoder_class(n_relations, config.n_channels, False, key4)
         self.alpha = jnp.array(0.5)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+    def __call__(self, edge_index, rel, all_data, key):
         key1, key2 = jrandom.split(key)
         embeddings1 = self.encoder1(all_data, key1)
         embeddings2 = self.encoder2(all_data, key2)
@@ -461,7 +422,7 @@ class EnsembleModel(eqx.Module, BaseModel):
         self.model2 = model2
         self.alpha = jnp.array(0.4)
 
-    def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):
+    def __call__(self, edge_index, rel, all_data, key):
         key1, key2 = jrandom.split(key)
         embeddings1 = self.model1.encoder(all_data, key1)
         num_channels = embeddings1.shape[1]
