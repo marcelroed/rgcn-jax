@@ -400,8 +400,8 @@ class LearnedEnsembleModel(eqx.Module, BaseModel):
                                     n_relations,
                                     key1)
         self.encoder2 = DirectEncoder(n_nodes, config.n_channels, key2, config.n_embeddings, config.normalization)
-        self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1], False, key3)
-        self.decoder2 = config.decoder_class(n_relations, config.n_channels, False, key4)
+        self.decoder1 = config.decoder_class(n_relations, config.hidden_channels[-1], normalize=False, key=key3)
+        self.decoder2 = config.decoder_class(n_relations, config.n_channels, normalize=False, key=key4)
         self.alpha = jnp.array(0.5)
 
     def __call__(self, edge_index, rel, all_data: RGCNModelTrainingData, key):

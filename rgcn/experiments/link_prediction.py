@@ -91,9 +91,10 @@ model_configs = {
                                    normalizing_constant='per_node',
                                    edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=0.01, name='RGCN',
                                    epochs=500, learning_rate=0.05, seed=42, n_decomp=100, decomposition_method='block'),
-    'combined': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
-                                     edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
-                                     epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis', n_decomp=2),
+    'rgcn-simpl-e': CombinedModel.Config(decoder_class=SimplE, hidden_channels=[400], normalizing_constant='per_node',
+                                         edge_dropout_rate=0.5, node_dropout_rate=None, l2_reg=None, name='Combined',
+                                         epochs=500, learning_rate=0.01, seed=42, decomposition_method='basis',
+                                         n_decomp=2),
     'doublergcn': DoubleRGCNModel.Config(decoder_class=SimplE, hidden_channels=[150], normalizing_constant='per_node',
                                          edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None, name='DoubleRGCN',
                                          epochs=250, learning_rate=0.05, seed=42, decomposition_method='basis',
@@ -105,13 +106,6 @@ model_configs = {
                                                    epochs=600, learning_rate=0.05, seed=42,
                                                    decomposition_method='basis',
                                                    n_channels=200, n_embeddings=1, normalization=False, n_decomp=2),
-    'simpleensemble': LearnedEnsembleModel.Config(decoder_class=SimplE, hidden_channels=[300],
-                                                  normalizing_constant='per_node',
-                                                  edge_dropout_rate=0.4, node_dropout_rate=None, l2_reg=None,
-                                                  name='SimplEnsemble',
-                                                  epochs=600, learning_rate=0.05, seed=42,
-                                                  decomposition_method='basis',
-                                                  n_channels=150, n_embeddings=2, normalization=False, n_decomp=2)
 }
 
 
