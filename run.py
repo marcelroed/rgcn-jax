@@ -1,3 +1,6 @@
+import warnings
+warnings.simplefilter('ignore', UserWarning)  # Ignore Apple Silicon warning
+
 import click
 from rgcn.experiments.link_prediction import train as train_link_prediction, model_configs
 from rgcn.experiments.entity_classification import main as train_entity_classification

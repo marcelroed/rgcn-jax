@@ -33,7 +33,20 @@ Options:
                                  determined by the dataset. Default is aifb.
   --seed INTEGER                 Seed for random number generator.
   --help                         Show this message and exit.
+```
 
+```
+Usage: run.py link-prediction [OPTIONS]
+
+Options:
+  --model [distmult|complex|simple|rescal|transe|rgcn-basis|rgcn-block|rgcn-simpl-e|doublergcn|learnedensemble]
+                                  Model to use. Also decides epochs and
+                                  learning rate.
+  --dataset [wordnet18|wordnet18rr|fb15k-237|fb15k]
+                                  Dataset to use. Note that FB15k is huge.
+  --validation / --no-validation  Whether to use validation set for model
+                                  selection.
+  --help                          Show this message and exit.
 ```
 
 
