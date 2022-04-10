@@ -170,7 +170,16 @@ class RGCNConv(eqx.Module):
 
         return self_transform
 
-    def get_work_relation(self, x, edge_type_idcs, edge_masks):
+    def _apply_normalizing_constant(self, edge_mask, out_term, prev_out, rel_edge_index, node_normalizing_constant):
+        if self.normalizing_constant == 'per_relation_node':
+            n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(
+                jnp.where(edge_mask, 1, 0), )
+            out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
+        elif self.normalizing_constant == 'per_node':
+            out_term = out_term / node_normalizing_constant.reshape(-1, 1)
+        return out_term
+
+    def _setup_normalizing_constant(self, edge_masks, edge_type_idcs, x):
         node_normalizing_constant = None
         if self.normalizing_constant == 'per_node':
             num_nodes = x.shape[0] if x is not None else self.in_channels
@@ -179,31 +188,36 @@ class RGCNConv(eqx.Module):
             node_normalizing_constant = jnp.zeros((num_nodes,)).at[flattened_edge_idcs[1]].add(
                 jnp.where(flattened_edge_mask, 1, 0))
             node_normalizing_constant = jnp.where(node_normalizing_constant == 0, 1, node_normalizing_constant)
+        return node_normalizing_constant
+
+    def get_work_relation(self, x, edge_type_idcs, edge_masks):
+        node_normalizing_constant = self._setup_normalizing_constant(edge_masks, edge_type_idcs, x)
 
         @jax.jit
         def work_relation(rel, state):
             prev_out = state
-            # edge_index[0] is the source node index
-            # edge_mask = edge_type == rel
-            # rel_edge_index = edge_index[:, edge_type_idcs == rel]
+
             edge_mask = edge_masks[rel].reshape((-1, 1))
             rel_edge_index = edge_type_idcs[rel]
 
-            if x is None:
-                # x is the identity matrix
+            if x is None:  # x is the identity matrix
                 out_rel = self.relation_weights.apply_id(rel)
             else:
                 out_rel = self.relation_weights.apply(rel, x)
 
             # Scatter the out_rel to the target nodes
-            out_term = jnp.zeros(prev_out.shape).at[rel_edge_index[1], :].add(
-                jnp.where(edge_mask, out_rel[rel_edge_index[0], :], 0), )
-            if self.normalizing_constant == 'per_relation_node':
-                n_input_edges = jnp.zeros((prev_out.shape[0], 1)).at[rel_edge_index[1]].add(
-                    jnp.where(edge_mask, 1, 0), )
-                out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
-            elif self.normalizing_constant == 'per_node':
-                out_term = out_term / node_normalizing_constant.reshape(-1, 1)
+            out_term = (
+                jnp.zeros(prev_out.shape)  # Start off with zeros
+                    .at[rel_edge_index[1], :]  # At each object
+                    .add(
+                        jnp.where(edge_mask, out_rel[rel_edge_index[0], :], 0)  # Scatter the output from the transform
+                    )
+            )
+
+            # Normalize
+            out_term = rel.apply_normalizing_constant(edge_mask, out_term, prev_out, rel_edge_index,
+                                                      node_normalizing_constant)
+
             out = prev_out + out_term
             return out
 
@@ -213,32 +227,15 @@ class RGCNConv(eqx.Module):
         # x: [num_nodes, in_channels]
 
         # out: [num_nodes, out_channels]
-        out = self.get_self_transform(x, key)
+        out = self.get_self_transform(x, key)  # Self loops
 
-        # self_transform: [num_nodes, out_channels]
-
+        # Function to add results from a single relation
         work_relation = self.get_work_relation(x, edge_type_idcs, edge_masks)
 
-        # Transform all the nodes using each relation transform
+        # Loop through all relations and add the results to out.
         out = jax.lax.fori_loop(0, self.n_relations, work_relation, out)
 
         return out
-
-    # def single_relation(self, x, edge_idx, rel):
-    #     out = self.get_self_transform(x)
-    #
-    #     if x is None:
-    #         # x is the identity matrix
-    #         out_rel = self.relation_weights[rel]
-    #     else:
-    #         out_rel = jnp.matmul(x, self.relation_weights[rel])
-    #
-    #     out_term = jnp.zeros(out.shape).at[edge_idx[1], :].add(out_rel[edge_idx[0], :])
-    #     n_input_edges = jnp.zeros((out.shape[0], 1)).at[edge_idx[1]].add(1)
-    #     out_term = jnp.where(n_input_edges == 0, out_term, out_term / n_input_edges)
-    #     out = out + out_term
-    #
-    #     return out
 
     def l2_loss(self):
         return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()

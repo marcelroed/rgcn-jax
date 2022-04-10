@@ -59,7 +59,7 @@ class EntityClassificationWrapper:
             test_idx=test_idx,
             test_y=test_y,
         )
-        del np_padded;
+        del np_padded
         del np_masks
         gc.collect()
 

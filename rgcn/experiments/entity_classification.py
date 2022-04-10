@@ -183,10 +183,10 @@ if __name__ == '__main__':
 
     logging.basicConfig(filename='entity_classification.log', level=logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    dataset = EntityClassificationWrapper.load_dataset('BGS')
+    dataset = EntityClassificationWrapper.load_dataset('AM')
     results = []
     try:
-        for i in trange(10, desc='Running models with different seeds'):
+        for i in trange(3, desc='Running models with different seeds'):
             result = run_experiment(dataset, seed=i)
             results.append(result)
     except KeyboardInterrupt:
