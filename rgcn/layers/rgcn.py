@@ -12,6 +12,7 @@ from typing_extensions import Literal
 
 
 # jax.config.update('jax_log_compiles', True)
+from rgcn.data import BasicGraphData
 
 
 class RelLinear(eqx.Module):
@@ -24,9 +25,11 @@ class RelLinear(eqx.Module):
         return self.weights[relation_index]
 
     def apply(self, rel, x):
+        if x is None:
+            return self._apply_id(rel)
         return jnp.matmul(x, self[rel])
 
-    def apply_id(self, rel):
+    def _apply_id(self, rel):
         """Apply to identity matrix."""
         return self[rel]
 
@@ -47,9 +50,11 @@ class DecomposedRelLinear(eqx.Module):
         return jnp.einsum('b,bio->io', self.base_weights[relation_index], self.bases)
 
     def apply(self, rel, x):
+        if x is None:
+            return self._apply_id(rel)
         return jnp.matmul(x, self[rel])
 
-    def apply_id(self, rel):
+    def _apply_id(self, rel):
         return self[rel]
 
     def l2_loss(self):
@@ -86,6 +91,8 @@ class BlockRelLinear(eqx.Module):
             self.blocks = initializer(key, (num_relations, num_blocks, in_block_size, out_block_size))
 
     def apply(self, rel, x):
+        if x is None:
+            return self._apply_id(rel)
         if self.remainder_block is None:
             # x: [num_points, in_features] -> [num_points, num_blocks, in_block_size]
             # where num_blocks * in_block_size = in_features
@@ -101,7 +108,7 @@ class BlockRelLinear(eqx.Module):
         else:
             raise NotImplementedError
 
-    def apply_id(self, rel):
+    def _apply_id(self, rel):
         # Have to construct the block matrix
         block_matrix = jnp.zeros((self.in_features, self.out_features))
         blocks = self.blocks[rel] if self.remainder_block is None else list(self.blocks[rel]) + [
@@ -200,10 +207,7 @@ class RGCNConv(eqx.Module):
             edge_mask = edge_masks[rel].reshape((-1, 1))
             rel_edge_index = edge_type_idcs[rel]
 
-            if x is None:  # x is the identity matrix
-                out_rel = self.relation_weights.apply_id(rel)
-            else:
-                out_rel = self.relation_weights.apply(rel, x)
+            out_rel = self.relation_weights.apply(rel, x)
 
             # Scatter the out_rel to the target nodes
             out_term = (
@@ -240,6 +244,59 @@ class RGCNConv(eqx.Module):
     def l2_loss(self):
         return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()
 
+
+class FastRGCNConv(eqx.Module):
+    self_weights: jnp.ndarray  # [in_channels, out_channels]
+    relation_weights: Union[RelLinear, DecomposedRelLinear, BlockRelLinear]
+    n_relations: int
+    in_channels: int
+    out_channels: int
+
+    def __init__(self, in_channels, out_channels, n_relations,
+                 decomposition_method: str = 'basis', n_decomp=2, key=None):
+        sw_key, rel_key = jrandom.split(key)
+
+        initializer = jnn.initializers.he_normal()
+
+        self.self_weight = initializer(sw_key, (in_channels, out_channels), jnp.float32)
+        self.n_relations = n_relations
+
+        if decomposition_method == 'basis':
+            self.relation_weights = DecomposedRelLinear(in_channels, out_channels, n_relations, n_decomp, rel_key)
+        else:
+            raise NotImplementedError
+
+    def get_self_transform(self, x):
+        return self.self_weight if x is None else self.self_weight @ x
+
+    def get_relation_transform(self, x, graph_data: BasicGraphData):
+        def work_relation(rel, state):
+            """
+            Want to scatter points with a transform corresponding to the correct relation
+
+            First we scatter our features onto the tail, adding the results.
+            """
+            rel_mask = graph_data.edge_type == rel
+
+            # [num_nodes, in_channels]
+            scattered_to = (
+                jnp.zeros_like(x)
+                   .at[graph_data.edge_idx[1, :]].add(jnp.where(rel_mask, x[graph_data.edge_idx[0, :]], 0))
+            )
+
+            # Transform
+            out = self.relation_weights.apply(rel, scattered_to)  # [num_nodes, out_channels]
+            return state + out
+        return jax.lax.fori_loop(0, self.n_relations, work_relation, jnp.zeros((x.shape[0], self.out_channels)))
+
+    def __call__(self, x, graph_data: BasicGraphData):
+        assert graph_data.sorted_by == 'tail'
+        out = self.get_self_transform(x)
+        out = out + self.get_relation_transform(x, graph_data)
+        return out
+
+    def l2_loss(self):
+        return jnp.sum(jnp.square(self.self_weight)) + self.relation_weights.l2_loss()
 
 def test_rgcn():
     x = jnp.ones((5, 3))

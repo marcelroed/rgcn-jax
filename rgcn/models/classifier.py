@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from typing_extensions import Literal
 
-from rgcn.layers.rgcn import RGCNConv
+from rgcn.layers.rgcn import RGCNConv, FastRGCNConv
+from rgcn.data import BasicGraphData
 
 
 class RGCNClassifier(eqx.Module):
@@ -27,20 +28,15 @@ class RGCNClassifier(eqx.Module):
         self.l2_reg = l2_reg
         key1, key2 = jrandom.split(key, 2)
         self.layers = [
-            RGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations,
-                     decomposition_method=decomposition_method, normalizing_constant='per_relation_node',
-                     dropout_rate=None, n_decomp=n_decomp, key=key1),
-            RGCNConv(in_channels=hidden_channels, out_channels=n_classes, n_relations=n_relations,
-                     decomposition_method=decomposition_method, normalizing_constant='per_relation_node',
-                     dropout_rate=None, n_decomp=n_decomp, key=key2),
+            FastRGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations, n_decomp=n_decomp, key=key1),
+            FastRGCNConv(in_channels=n_nodes, out_channels=hidden_channels, n_relations=n_relations, n_decomp=n_decomp, key=key2)
         ]
 
     @eqx.filter_jit
-    def __call__(self, x, edge_type_idcs, edge_masks):
-
+    def __call__(self, x, graph_data: BasicGraphData):
         for layer in self.layers[:-1]:
-            x = jax.nn.relu(layer(x, edge_type_idcs, edge_masks, key=None))
-        x = self.layers[-1](x, edge_type_idcs, edge_masks, key=None)
+            x = jax.nn.relu(layer(x, graph_data))
+        x = self.layers[-1](x, graph_data)
         return x
 
     def l2_loss(self):

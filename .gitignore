@@ -141,3 +141,7 @@ train.txt
 test.txt
 valid.txt
 *.orig
+
+# Profiling
+*.prof
+*.svg
